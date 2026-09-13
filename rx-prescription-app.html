@@ -584,9 +584,11 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       var c = checks[i] || {};
       var st = c.status || '';
       var ok = st.indexOf('Verified') === 0;
-      var dose = [m.dosage, m.frequency, m.duration].filter(Boolean).join(' · ');
+      function isNA(v){ return !v || /^\s*not available\s*$/i.test(String(v)); }
+      var doseParts = [m.dosage, m.frequency, m.duration].filter(function(v){ return v && !isNA(v); });
+      var dose = doseParts.join(' · ') || '—';
       rows.push([m.name || '', dose, st || '—']);
-      html += '<div class="med"><span class="dot ' + (ok ? 'g' : 'r') + '" aria-hidden="true"></span><div><b>' + esc(m.name) + '</b><div class="d">' + esc(dose) + (c.composition ? ' · ' + esc(c.composition) : '') + '</div></div><span class="conf ' + (ok ? 'ok' : 'low') + '">' + esc(st.slice(0, 24) || '—') + '</span></div>';
+      html += '<div class="med"><span class="dot ' + (ok ? 'g' : 'r') + '" aria-hidden="true"></span><div><b>' + esc(m.name) + '</b><div class="d">' + esc(dose) + (c.composition && !isNA(c.composition) ? ' · ' + esc(c.composition) : '') + '</div></div><span class="conf ' + (ok ? 'ok' : 'low') + '">' + esc(st.slice(0, 24) || '—') + '</span></div>';
       // Indian DB details (was missing — now shows medicine_desc, side effects, pack etc.)
       var extra = '';
       if (c.medicine_desc) extra += '<b>What it is for:</b> ' + esc(String(c.medicine_desc).slice(0, 500)) + '<br>';
@@ -655,12 +657,13 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
         if (payload && payload.result) {
           renderLive(payload);
           var n = (payload.result.medications || []).length;
-          saveHist({ ts: new Date().toLocaleString(), label: n + (n === 1 ? ' medicine · live' : ' medicines · live') });
+          saveHist({ ts: new Date().toLocaleString(), label: n + (n === 1 ? ' medicine · live' : ' medicines · live'), payload: payload });
           enableChat(JSON.stringify(payload.result).slice(0, 3000));
-        } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern' }); }
+          lastPayload = payload;
+        } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern', payload: null }); }
         done();
       });
-    } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern' }); done(); }
+    } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern', payload: null }); done(); }
   }
   function applyRole() {
     document.querySelectorAll('[data-doctor]').forEach(function (e) { e.hidden = patientView; });
@@ -758,6 +761,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
   }
   bindExports(ROWS);
   var lastCtx = '';
+  var lastPayload = null;
   function saveHist(entry) {
     try {
       var h = JSON.parse(localStorage.getItem('rxcare-history') || '[]');
@@ -773,15 +777,27 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     list.innerHTML = '';
     document.getElementById('histEmpty').style.display = h.length ? 'none' : '';
     document.getElementById('histClear').hidden = !h.length;
-    h.forEach(function (e) {
+    h.forEach(function (e, idx) {
       var d = document.createElement('div');
       d.className = 'histrow';
+      d.style.cursor = e.payload ? 'pointer' : 'default';
+      d.title = e.payload ? 'Click to reopen' : '';
       var b = document.createElement('b');
       b.textContent = e.ts;
       var s = document.createElement('span');
       s.className = 'meta';
       s.textContent = e.label;
       d.appendChild(b); d.appendChild(s);
+      if (e.payload) {
+        d.addEventListener('click', function () {
+          // reopen like Streamlit's st.json(h["raw"])
+          try {
+            renderLive(e.payload);
+            document.querySelector('[data-t="rx"]').click();
+            window.scrollTo({ top: 0, behavior: 'smooth' });
+          } catch (err) {}
+        });
+      }
       list.appendChild(d);
     });
   }
