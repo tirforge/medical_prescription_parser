@@ -1,7 +1,35 @@
 import { test, expect } from '@playwright/test';
 import path from 'path';
+import fs from 'fs';
+
+// Detect whether a real Gemini key is configured (same check as playwright.config.js).
+// CI has no keys.py, so /parse and /chat would 503 -> the app falls back to its static
+// demo pattern (Dolo 650/Augmentin 625), which never satisfies the Aisha Khan assertions.
+// When no key is present we stub the network with a real rx_00006 parse fixture so the
+// full user flow is still exercised deterministically.
+let hasKey = false;
+try {
+  const m = fs.readFileSync('keys.py', 'utf8').match(/GOOGLE_API_KEY\s*=\s*["']([^"']+)["']/);
+  hasKey = !!(m && m[1]);
+} catch {}
+const forceStub = process.env.RXCARE_E2E_STUB === '1';
+const stub = forceStub || !hasKey;
+
+const parseFixture = JSON.parse(fs.readFileSync(path.resolve('tests/fixtures/parse_rx_00006.json'), 'utf8'));
 
 test('actual user: open site, upload, see results, copy, history, chat', async ({ page, context }) => {
+  if (stub) {
+    await page.route('**/parse', async (route) => {
+      await route.fulfill({ status: 200, contentType: 'application/json', body: JSON.stringify(parseFixture) });
+    });
+    await page.route('**/chat', async (route) => {
+      await route.fulfill({
+        status: 200,
+        contentType: 'application/json',
+        body: JSON.stringify({ answer: 'Prednisone is a corticosteroid used to reduce inflammation. Not medical advice — consult your doctor.', model: 'fixture' }),
+      });
+    });
+  }
   // Like a real user opening the deployed site
   await page.goto('http://127.0.0.1:8000/');
   await expect(page.locator('text=RxCare').first()).toBeVisible();

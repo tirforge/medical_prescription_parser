@@ -1,0 +1,53 @@
+{
+  "result": {
+    "patient_name": "Aisha Khan",
+    "patient_age": 73,
+    "patient_gender": "Not available",
+    "doctor_name": "Dr. C. Rossi",
+    "doctor_license": "Not available",
+    "prescription_date": "2024-12-16T00:00:00",
+    "medications": [
+      {
+        "name": "Prednisone",
+        "dosage": "25 mg",
+        "frequency": "Not available",
+        "duration": "Not available"
+      }
+    ],
+    "additional_notes": "- Take medication after meals.",
+    "_confidence": {
+      "patient_name": "high",
+      "patient_age": "high",
+      "patient_gender": "low",
+      "doctor_name": "high",
+      "doctor_license": "low",
+      "prescription_date": "high",
+      "medications": [
+        "high"
+      ]
+    }
+  },
+  "verification": [
+    {
+      "extracted": "Prednisone",
+      "match": "Predone Syrup",
+      "composition": "Prednisolone (5mg/5ml)",
+      "manufacturer": "Cipla Ltd",
+      "price": "18.26",
+      "pack_size": "bottle of 60 ml Syrup",
+      "med_type": "allopathy",
+      "medicine_desc": "",
+      "side_effects_db": "",
+      "drug_interactions_db": "",
+      "salt_composition": "",
+      "salt_count": 0,
+      "salt_example": "",
+      "status": "Verified \u2014 auto-corrected from 'Prednisone'",
+      "alternatives": [
+        "Apdrops PD Eye Drop",
+        "Acticort 10mg Tablet",
+        "Acticort 5mg Tablet"
+      ]
+    }
+  ]
+}
