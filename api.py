@@ -156,20 +156,55 @@ async def parse(files: List[UploadFile] = File(...)):
         raise HTTPException(status_code=503, detail=f"Vision stack unavailable: {e}")
     if not os.environ.get("GOOGLE_API_KEY"):
         raise HTTPException(status_code=503, detail="GOOGLE_API_KEY not set on server")
-    from indian_db import verify_medicine
+    from indian_db import verify_medicine, find_alternatives
     tmpdir = tempfile.mkdtemp(prefix="rx_api_")
     try:
         paths = []
         for f in files:
-            p = os.path.join(tmpdir, f.filename or "upload.png")
+            data = await f.read()
+            fname = f.filename or "upload.png"
+            p = os.path.join(tmpdir, fname)
             with open(p, "wb") as out:
-                out.write(await f.read())
-            paths.append(p)
+                out.write(data)
+            # PDF → images via PyMuPDF (preocr already depends on it)
+            if fname.lower().endswith(".pdf"):
+                try:
+                    from prescription import pdf_to_images as _pdf2img
+                    imgs = _pdf2img(data, tmpdir)
+                    if (imgs and len(imgs)): paths.extend(imgs)
+                    else: paths.append(p)
+                except Exception:
+                    paths.append(p)
+            else:
+                paths.append(p)
+        if not paths:
+            raise HTTPException(status_code=400, detail="No valid images/PDF pages found")
         res = get_prescription_informations(paths)
         for m in res.get("medications", []):
             m["frequency"] = normalize_frequency(m.get("frequency", ""))
         res["medications"] = dedupe_medications(res.get("medications"))
-        checks = [verify_medicine(m.get("name", "")) for m in res.get("medications", [])]
+        checks = []
+        for m in res.get("medications", []):
+            chk = verify_medicine(m.get("name", ""))
+            # alternatives for this med
+            try:
+                alts = find_alternatives(chk.get("composition","") or m.get("name",""), exclude=chk.get("match",""), n=3)
+                chk["alternatives"] = alts
+            except Exception:
+                chk["alternatives"] = []
+            # age-dosage simple check (educational only)
+            try:
+                age = res.get("patient_age")
+                if isinstance(age, str) and age.isdigit():
+                    age = int(age)
+                if isinstance(age, int) and age < 12:
+                    # flag high adult doses for children
+                    dose = (m.get("dosage") or "").lower()
+                    if any(x in dose for x in ["500 mg","650 mg","1g","1000 mg"]):
+                        chk["age_flag"] = f"High adult dose {m.get('dosage')} for age {age} — verify with pediatrician"
+            except Exception:
+                pass
+            checks.append(chk)
         return {"result": res, "verification": checks}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

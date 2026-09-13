@@ -593,8 +593,12 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       var extra = '';
       if (c.medicine_desc) extra += '<b>What it is for:</b> ' + esc(String(c.medicine_desc).slice(0, 500)) + '<br>';
       if (c.side_effects_db) extra += '<b>Side effects:</b> ' + esc(String(c.side_effects_db).slice(0, 500)) + '<br>';
-      if (c.drug_interactions_db && String(c.drug_interactions_db).trim().length > 10) extra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>';
+      if (c.drug_interactions_db && String(c.drug_interactions_db).trim().length > 10 && String(c.drug_interactions_db).indexOf('[]') === -1) {
+        try { var di = JSON.parse(c.drug_interactions_db); if (di.effect && di.effect[0]) extra += '<b>Interactions:</b> ' + esc(di.effect[0].slice(0,200)) + '<br>'; else extra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>'; } catch(e){ extra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>'; }
+      }
       if (c.manufacturer || c.pack_size) extra += '<b>Manufacturer:</b> ' + esc(c.manufacturer || '—') + ' · <b>Pack:</b> ' + esc(c.pack_size || '—') + ' · <b>Type:</b> ' + esc(c.med_type || '—') + '<br>';
+      if (c.alternatives && c.alternatives.length) extra += '<b>Alternatives:</b> ' + esc(c.alternatives.slice(0,3).join(', ')) + '<br>';
+      if (c.age_flag) extra += '<span style="color:var(--warn)"><b>Age check:</b> ' + esc(c.age_flag) + '</span><br>';
       if (extra) html += '<div class="card" style="margin:6px 0 12px 24px; font-size:13px; background:var(--fg-soft)">' + extra + '</div>';
     });
     if (!meds.length) html += '<p class="sub">Backend returned no medicines for this upload.</p>';
