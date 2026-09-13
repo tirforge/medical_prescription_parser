@@ -17,3 +17,6 @@ Check_*/
 *.db
 .streamlit/secrets.toml
 .venv/
+
+# Design-tool sidecars (preview metadata, not source)
+*.artifact.json
