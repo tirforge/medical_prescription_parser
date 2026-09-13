@@ -547,8 +547,20 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
   function renderLive(payload) {
     var meds = (payload.result && payload.result.medications) || [];
     var checks = payload.verification || [];
+    var r = payload.result || {};
     var rows = [['Medicine', 'Dose', 'Match']];
     var html = '';
+    // Patient/doctor header (missing before — now matches backend PrescriptionInformations)
+    var patientLine = [r.patient_name, r.patient_age ? r.patient_age + 'y' : '', r.patient_gender].filter(Boolean).join(' · ');
+    var doctorLine = [r.doctor_name, r.doctor_license].filter(Boolean).join(' · ');
+    var dateLine = r.prescription_date ? String(r.prescription_date).slice(0, 10) : '';
+    if (patientLine || doctorLine || dateLine) {
+      html += '<div class="card" style="margin-bottom:12px"><b>Patient:</b> ' + esc(patientLine || '—') + '<br><b>Doctor:</b> ' + esc(doctorLine || '—') + '<br><b>Date:</b> ' + esc(dateLine || '—') + '</div>';
+    }
+    if (r.additional_notes) {
+      var notes = String(r.additional_notes).replace(/<[^>]*>/g, ' ').slice(0, 600);
+      html += '<div class="card"><b>Notes:</b> ' + esc(notes) + '</div>';
+    }
     meds.forEach(function (m, i) {
       var c = checks[i] || {};
       var st = c.status || '';
