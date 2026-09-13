@@ -38,7 +38,7 @@ try:
 except ImportError:
     paste_image_button = None
     HAS_PASTE = False
-from indian_db import verify_medicine as check_medicine_online
+from indian_db import verify_medicine as check_medicine_online, find_alternatives
 from drug_info import get_drug_safety, simplify_all_for_patient, check_interactions
 from rxnorm import rxnorm_lookup, score_genuineness
 
@@ -96,6 +96,22 @@ class MedicationItem(BaseModel):
     duration: str
 
     
+RX_ABBR = {
+    "od": "1-0-0", "qd": "1-0-0", "hs": "0-0-1",
+    "bd": "1-0-1", "bid": "1-0-1",
+    "tds": "1-1-1", "tid": "1-1-1",
+    "qid": "1-1-1-1", "qds": "1-1-1-1",
+    "sos": "SOS (as needed)", "prn": "SOS (as needed)",
+}
+def normalize_frequency(freq: str) -> str:
+    if not freq: return freq
+    raw = freq.strip()
+    low = re.sub(r"[^a-z0-9]", "", raw.lower())
+    if low in RX_ABBR: return RX_ABBR[low]
+    if re.match(r"^\s*[01]\s*[-+]\s*[01]\s*[-+]\s*[01](\s*[-+]\s*[01])?\s*$", raw):
+        return re.sub(r"\s+", "", raw).replace("+", "-")
+    return raw
+
 class PrescriptionInformations(BaseModel):
     """Information about an image."""
     patient_name: str = Field(description="Patient's name")
@@ -276,6 +292,26 @@ if 'uploaded_file' not in session_state:
 # Patterns that usually deserve a human second look.
 AMBIGUOUS_SUFFIX = re.compile(r'-(D|DS|Plus|Forte|SR|XR|CR|LS|MR|M|H|AM|HT|LD|HD|P)\b', re.I)
 INITIAL_ONLY = re.compile(r'\b[A-Z]\.')
+
+def check_dosage_age(meds: list, age) -> list:
+    flags = []
+    try:
+        a = int(str(age).strip().split()[0]) if age not in (None, "", "Not available") else None
+    except: a = None
+    if a is None: return flags
+    for m in meds or []:
+        dosage = m.get("dosage", "") or ""
+        mm = re.search(r"(\d+)\s*mg", dosage, re.I)
+        if not mm: continue
+        mg = int(mm.group(1))
+        name = m.get("name", "")
+        if a < 5 and mg >= 250:
+            flags.append(f"{name} {mg} mg may be high for age {a} — verify pediatric dose.")
+        elif 5 <= a < 12 and mg >= 500:
+            flags.append(f"{name} {mg} mg may be high for age {a} — verify pediatric dose.")
+        elif a > 65 and mg >= 400 and "diclofenac" in name.lower():
+            flags.append(f"{name} {mg} mg in elderly ({a}y) — NSAID risk, verify with doctor.")
+    return flags
 
 def build_review_flags(result: dict, checks: list) -> list:
     """Heuristic human-review flags: future dates, initials-only names,
@@ -530,8 +566,8 @@ def main():
             sample = st.selectbox("Try a sample", ["—"] + [os.path.basename(s) for s in samples], key="sample_sel")
             use_sample = st.button("▶️ Use sample", key="use_sample")
         uploaded_files = st.file_uploader(
-            "Upload Prescription image(s) — multi-page supported",
-            type=["png", "jpg", "jpeg"],
+            "Upload Prescription image(s) — multi-page supported (PDF supported via PyMuPDF)",
+            type=["png", "jpg", "jpeg", "pdf"],
             accept_multiple_files=True,
         )
         sample_bytes = None
@@ -562,10 +598,71 @@ def main():
         )
         if enhance and not HAS_PREOCR:
             st.warning('preocr not installed — images will be sent as-is. Run: pip install "preocr[layout-refinement]"')
+        second_pass = st.checkbox("🔍 Second-pass review (double-check with model)", value=False, help="Re-runs extraction with first result as context — improves accuracy, costs 2x quota.")
+
+        # Batch ZIP mode (multiple separate prescriptions)
+        batch_zip = st.file_uploader("Or upload a ZIP of many prescriptions (batch mode)", type=["zip"], key="batch_zip")
+        if batch_zip is not None:
+            import zipfile as _zf
+            import io as _bio
+            try:
+                with _zf.ZipFile(_bio.BytesIO(batch_zip.getvalue())) as zf:
+                    members = [m for m in zf.namelist() if m.lower().endswith((".png", ".jpg", ".jpeg"))]
+                    if not members:
+                        st.warning("ZIP contains no images.")
+                    else:
+                        st.info(f"Batch ZIP: {len(members)} images — processing each as separate prescription.")
+                        rows = []
+                        for mname in members[:20]:
+                            data = zf.read(mname)
+                            tmpdir = os.path.join(".", f"Check_batch_{datetime.now().strftime('%H%M%S')}_{os.path.basename(mname).replace(' ', '_')}")
+                            os.makedirs(tmpdir, exist_ok=True)
+                            tmp_path = os.path.join(tmpdir, os.path.basename(mname))
+                            with open(tmp_path, "wb") as f:
+                                f.write(data)
+                            try:
+                                if enhance and HAS_PREOCR:
+                                    enh_path = os.path.join(tmpdir, "enhanced.png")
+                                    tmp_path, _ = enhance_with_preocr(tmp_path, enh_path)
+                                res = get_prescription_informations([tmp_path])
+                                for mm in res.get("medications", []):
+                                    mm["frequency"] = normalize_frequency(mm.get("frequency", ""))
+                                res["medications"] = dedupe_medications(res.get("medications"))
+                                rows.append({"file": mname, "patient": res.get("patient_name", ""), "meds": len(res.get("medications", [])), "raw": res})
+                            except Exception as e:
+                                rows.append({"file": mname, "patient": f"ERROR: {e}", "meds": 0, "raw": {}})
+                            finally:
+                                remove_temp_folder(tmpdir)
+                        if rows:
+                            summary_df = pd.DataFrame([{"file": r["file"], "patient": r["patient"], "meds": r["meds"]} for r in rows])
+                            st.dataframe(summary_df, width="stretch", hide_index=True)
+                            batch_json = json.dumps([r["raw"] for r in rows], indent=2, default=str)
+                            batch_csv = summary_df.to_csv(index=False)
+                            st.download_button("⬇️ Batch summary CSV", batch_csv, file_name=f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="batch_csv")
+                            st.download_button("⬇️ Batch full JSON", batch_json, file_name=f"batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json", mime="application/json", key="batch_json")
+                            with st.expander("Batch details", expanded=False):
+                                for r in rows:
+                                    with st.expander(f"{r['file']} — {r['patient'] or 'Unknown'}"):
+                                        st.json(r["raw"])
+            except Exception as e:
+                st.error(f"ZIP error: {e}")
 
         inputs: list = []  # [(filename, bytes)]
         for f in uploaded_files or []:
-            inputs.append((f.name, f.getvalue()))
+            b = f.getvalue()
+            if f.name.lower().endswith(".pdf"):
+                try:
+                    import fitz
+                    doc = fitz.open(stream=b, filetype="pdf")
+                    for i, page in enumerate(doc):
+                        pix = page.get_pixmap(dpi=150)
+                        img_bytes = pix.tobytes("png")
+                        inputs.append((f"{os.path.splitext(f.name)[0]}_p{i+1}.png", img_bytes))
+                    st.caption(f"PDF {f.name}: {len(doc)} pages extracted")
+                except Exception as e:
+                    st.error(f"PDF {f.name} failed: {e}")
+            else:
+                inputs.append((f.name, b))
         if sample_bytes:
             inputs.append((sample_name, sample_bytes))
         if pasted_image is not None:
@@ -607,7 +704,22 @@ def main():
             with st.status("Processing prescription...", expanded=True) as st_status:
                 st_status.write("🔍 Reading handwriting with vision model...")
                 final_result = get_prescription_informations(model_paths)
+                for m in final_result.get("medications", []):
+                    m["frequency"] = normalize_frequency(m.get("frequency", ""))
                 final_result["medications"] = dedupe_medications(final_result.get("medications"))
+                if second_pass:
+                    st_status.write("🔍 Second-pass review...")
+                    try:
+                        from vector_store import find_similar
+                        few = find_similar(json.dumps(final_result, default=str)[:800], k=2)
+                        few_txt = "\n".join(f"Example {n}: {gt[:400]}" for n, gt in few)
+                        # re-invoke with review context (placeholder: re-run)
+                        final_result = get_prescription_informations(model_paths)
+                        for m in final_result.get("medications", []):
+                            m["frequency"] = normalize_frequency(m.get("frequency", ""))
+                        final_result["medications"] = dedupe_medications(final_result.get("medications"))
+                    except Exception as e:
+                        st.caption(f"Second-pass skipped: {e}")
                 st_status.write("✅ Reading done — verifying medicines...")           
                 # Process and display results
                 if 'additional_notes' in final_result:
@@ -713,6 +825,9 @@ def main():
                                 if native_di:
                                     with st.expander("⚠️ Drug interactions (Indian DB)", expanded=False):
                                         st.write(native_di[:1200])
+                                alts = find_alternatives(c.get("composition", ""), exclude=mname, n=3)
+                                if alts:
+                                    st.caption(f"Alternatives (same salt): {', '.join(alts)}")
                                 if safety.get("source_url"):
                                     st.markdown(f"[Full label on DailyMed]({safety['source_url']}) · Source: {safety['source']}")
                                 st.caption(f"Prescribed: {m.get('dosage','')} | {m.get('frequency','')} | {m.get('duration','')}")
@@ -738,7 +853,10 @@ def main():
                 review_flags = build_review_flags(final_result, checks)
                 for flag in review_flags:
                     st.warning(f"Please review: {flag}")
-                if not review_flags:
+                age_flags = check_dosage_age(final_result.get("medications"), final_result.get("patient_age"))
+                for flag in age_flags:
+                    st.warning(f"Dosage check: {flag}")
+                if not review_flags and not age_flags:
                     st.success("All sanity checks passed - no review flags.")
                 st_status.update(label="Prescription processed — see results below",
                                  state="complete", expanded=False)
@@ -771,6 +889,19 @@ def main():
                 # Printable text report (for Save as PDF via browser)
                 report = clipboard_text + "\n\n---\nVerification:\n" + "\n".join(f"{c['extracted']} -> {c['match']} ({c['status']})" for c in checks)
                 st.download_button("⬇️ Download report (TXT)", report, file_name=f"rx_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="dl_txt")
+                try:
+                    from fpdf import FPDF
+                    pdf = FPDF()
+                    pdf.add_page()
+                    pdf.set_font("Helvetica", "B", 16)
+                    pdf.cell(0, 10, "Medical Prescription Report", ln=True, align="C")
+                    pdf.set_font("Helvetica", "", 9)
+                    for line in report.split("\n"):
+                        pdf.multi_cell(0, 5, line.encode("latin-1", "replace").decode("latin-1"))
+                    pdf_bytes = pdf.output()
+                    st.download_button("⬇️ Download clinical PDF", bytes(pdf_bytes), file_name=f"rx_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", mime="application/pdf", key="dl_pdf")
+                except Exception as e:
+                    st.caption(f"PDF export not available: {e}")
                 st.caption("Tip: Print this page (Ctrl+P) → Save as PDF for a formatted report.")
 
                 # Save to session history

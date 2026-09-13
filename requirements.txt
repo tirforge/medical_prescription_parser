@@ -20,3 +20,6 @@ preocr[layout-refinement]==1.11.0
 
 # Clipboard image paste
 streamlit-paste-button==0.1.2
+
+# PDF support (PyMuPDF via preocr, fpdf2 for clinical report)
+fpdf2==2.8.8

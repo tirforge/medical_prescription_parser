@@ -128,3 +128,26 @@ def _verify_local(name: str) -> dict:
     else:
         result["status"] = "Not found (likely BD-local brand)"
     return result
+
+
+@st.cache_data(ttl=86400, show_spinner=False)
+def find_alternatives(composition: str, exclude: str = "", n: int = 3) -> list:
+    """Alternatives with same salt/composition (different brand)."""
+    if not composition: return []
+    # Use first salt token as key
+    toks = [t for t in re.split(r"[^a-z]+", composition.lower()) if len(t) >= 4]
+    if not toks: return []
+    key = toks[0]
+    try:
+        brands, _ = _load_db()
+    except: return []
+    alts = []
+    for base, entries in brands.items():
+        if base == _clean(exclude): continue
+        for ent in entries:
+            comp = ent[1] or ""
+            if key in comp.lower():
+                alts.append(ent[0])
+                break
+        if len(alts) >= n: break
+    return alts[:n]
