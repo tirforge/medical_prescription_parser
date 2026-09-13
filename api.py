@@ -77,12 +77,14 @@ async def chat(body: dict):
     """Grounded medication Q&A - answers about any drug, not just prescription context."""
     question = (body.get("question") or "").strip()
     context = str(body.get("context") or "")[:3000]
+    mode = (body.get("mode") or "patient").lower()  # patient | doctor
     if not question:
         raise HTTPException(status_code=400, detail="question required")
     if not os.environ.get("GOOGLE_API_KEY"):
         raise HTTPException(status_code=503, detail="GOOGLE_API_KEY not set on server")
     # Enrich with Indian DB lookup for any drug mentioned in question
     db_ctx = ""
+    best_chk = None
     try:
         from indian_db import verify_medicine
         import re
@@ -91,16 +93,28 @@ async def chat(body: dict):
         # also try bigrams
         bigrams = [" ".join(toks[i:i+2]) for i in range(len(toks)-1)]
         candidates = toks + bigrams
+        stop = {"what","are","side","effects","effect","sideeffect","sideeffects","whatis","is","of","the","and","for","with","a","an","tell","me","about","show","details","info","information","medicine","drug","tablet","capsule","syrup","are","whats","what's"}
         seen = set()
         for cand in candidates:
             lc = cand.lower()
-            if lc in seen or len(lc) < 3:
+            if lc in seen or len(lc) < 3 or lc in stop:
+                continue
+            if " " not in lc and lc in stop:
+                continue
+            # skip bigrams containing stopwords only
+            words = lc.split()
+            if words and all(w in stop for w in words):
                 continue
             seen.add(lc)
             try:
                 chk = verify_medicine(cand)
+                # guard false positives: e.g. "side" -> Slide Suspension; require at least 4 chars and not pure stopword fuzzy
+                if chk.get("status", "").startswith("Verified") and len(cand) < 4:
+                    continue
                 if chk.get("status", "").startswith("Verified"):
-                    db_ctx += f"\nDB hit for '{cand}': {chk.get('match')} | {chk.get('composition')} | {chk.get('manufacturer','')} | {chk.get('medicine_desc','')[:400]} | Side effects: {chk.get('side_effects_db','')[:400]}"
+                    if best_chk is None or (not best_chk.get("side_effects_db") and chk.get("side_effects_db")):
+                        best_chk = chk
+                    db_ctx += f"\nDB hit for '{cand}': {chk.get('match')} | {chk.get('composition')} | {chk.get('manufacturer','')} | {chk.get('pack_size','')} | {chk.get('medicine_desc','')[:400]} | Side effects: {chk.get('side_effects_db','')[:400]} | Salt: {chk.get('salt_composition','')[:200]}"
                 elif "Not found" in chk.get("status","") and len(cand) >= 4:
                     # skip common phrases like "what sideeffect" — only real drug-like tokens
                     words = cand.lower().split()
@@ -109,8 +123,28 @@ async def chat(body: dict):
                     db_ctx += f"\nDB: '{cand}' not in Indian registry (254k) — may be BD-local or misspelled."
             except Exception:
                 pass
-            if len(db_ctx) > 1500:
+            if len(db_ctx) > 1800:
                 break
+        # If best hit has empty side_effects (e.g. "Dolo" -> Drops with no SE), enrich via FDA/openFDA
+        if best_chk and not (best_chk.get("side_effects_db") or "").strip():
+            try:
+                from drug_info import get_drug_safety
+                comp = (best_chk.get("composition") or "").split("(")[0].strip().split(",")[0].strip()
+                if comp:
+                    safety = get_drug_safety(comp)
+                    if safety and (safety.get("side_effects") or safety.get("label_text","")[:300]):
+                        se = safety.get("side_effects") or safety.get("label_text","")[:400]
+                        db_ctx += f"\nFDA label for {comp}: {str(se)[:500]} (use as fallback; registry entry had none)"
+            except Exception:
+                pass
+            # also try stronger hit "Dolo 650" if question was just "Dolo" (same salt, different pack)
+            try:
+                if "dolo" in question.lower() or (best_chk.get("match","").lower().startswith("dolo")):
+                    alt = verify_medicine("Dolo 650")
+                    if alt.get("status","").startswith("Verified") and alt.get("side_effects_db"):
+                        db_ctx += f"\nRelated pack {alt.get('match')} ({alt.get('composition')}) side effects: {alt.get('side_effects_db')[:300]} — same salt Paracetamol, use with dosage note; primary {best_chk.get('match')} had none listed."
+            except Exception:
+                pass
     except Exception:
         pass
     # Direct not-found only if no Verified hit (so Dolo 650 still gets normal answer, sato gets not-found)
@@ -128,13 +162,19 @@ async def chat(body: dict):
             google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
             temperature=0,
         )
+        role_instruction = (
+            "You are answering a clinician. Use precise medical terminology, include salt composition, pack, manufacturer and alternatives when in DB, and cite side effects and interactions exactly as in DB/FDA. Still add disclaimer."
+            if mode == "doctor" else
+            "Answer helpfully and concisely in plain English for a patient. If DB gives side effects/composition, cite them in simple words."
+        )
         prompt = (
+            f"Mode: {mode}\n"
             f"Prescription context (may be empty): {context}\n"
             f"Indian DB lookup for question terms:{db_ctx or ' (no DB hit)'}\n"
             f"Question: {question}\n"
-            "Answer helpfully and concisely in plain English. If DB gives side effects/composition, cite them. "
+            f"{role_instruction} "
             "If DB says Not found, say so plainly and suggest checking the strip spelling or manufacturer. "
-            "Never invent side effects not in DB. Not medical advice — advise see doctor/pharmacist."
+            "Never invent side effects not in DB/FDA label. Not medical advice — advise see doctor/pharmacist."
         )
         ans = llm.invoke([HumanMessage(content=prompt)]).content
         if isinstance(ans, list):

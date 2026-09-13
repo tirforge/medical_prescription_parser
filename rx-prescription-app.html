@@ -576,7 +576,8 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     var t = { 'OD':'Once a day','QD':'Once a day','1-0-0':'Once a day','BD':'Twice a day','BID':'Twice a day','1-0-1':'Twice a day','1+0+1':'Twice a day','TDS':'Three times a day','TID':'Three times a day','1-1-1':'Three times a day','QID':'Four times a day','SOS':'As needed','HS':'At bedtime','0-0-1':'Once at night' };
     return t[u] || t[u.replace('+','-')] || s;
   }
-  var patientView = true;
+   var patientView = true;
+  try { if (localStorage.getItem('rxcare-role') === 'doctor') patientView = false; } catch(e) {}
   var demoHTML = res.innerHTML;
   function renderLive(payload) {
     var meds = (payload.result && payload.result.medications) || [];
@@ -627,17 +628,21 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       var dose = doseParts.join(' · ') || '—';
       rows.push([m.name || '', dose, st || '—']);
       html += '<div class="med"><span class="dot ' + (ok ? 'g' : 'r') + '" aria-hidden="true"></span><div><b>' + esc(m.name) + '</b><div class="d">' + esc(dose) + (c.composition && !isNA(c.composition) ? ' · ' + esc(c.composition) : '') + '</div></div><span class="conf ' + (ok ? 'ok' : 'low') + '">' + esc(st.slice(0, 24) || '—') + '</span></div>';
-      // Indian DB details (was missing — now shows medicine_desc, side effects, pack etc.)
+      // Patient vs Doctor: patient sees plain words, doctor sees full technical — both share same med card but doctor gets more
       var extra = '';
       if (c.medicine_desc) extra += '<b>What it is for:</b> ' + esc(String(c.medicine_desc).slice(0, 500)) + '<br>';
-      if (c.side_effects_db) extra += '<b>Side effects:</b> ' + esc(String(c.side_effects_db).slice(0, 500)) + '<br>';
+      if (c.side_effects_db && String(c.side_effects_db).trim()) extra += '<b>Side effects:</b> ' + esc(String(c.side_effects_db).slice(0, 500)) + '<br>';
+      else if (c.composition) extra += '<b>Side effects:</b> <span style="color:var(--muted)">Not listed for this pack — see the leaflet or ask pharmacist. Query a specific strength like “Dolo 650”.</span><br>';
+      var doctorExtra = '';
+      if (c.manufacturer || c.pack_size) doctorExtra += '<b>Manufacturer:</b> ' + esc(c.manufacturer || '—') + ' · <b>Pack:</b> ' + esc(c.pack_size || '—') + ' · <b>Type:</b> ' + esc(c.med_type || '—') + '<br>';
+      if (c.salt_composition) doctorExtra += '<b>Salt:</b> ' + esc(String(c.salt_composition).slice(0,300)) + '<br>';
       if (c.drug_interactions_db && String(c.drug_interactions_db).trim().length > 10 && String(c.drug_interactions_db).indexOf('[]') === -1) {
-        try { var di = JSON.parse(c.drug_interactions_db); if (di.effect && di.effect[0]) extra += '<b>Interactions:</b> ' + esc(di.effect[0].slice(0,200)) + '<br>'; else extra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>'; } catch(e){ extra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>'; }
+        try { var di = JSON.parse(c.drug_interactions_db); if (di.effect && di.effect[0]) doctorExtra += '<b>Interactions:</b> ' + esc(di.effect.slice(0,3).join('; ').slice(0,300)) + '<br>'; else doctorExtra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>'; } catch(e){ doctorExtra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>'; }
       }
-      if (c.manufacturer || c.pack_size) extra += '<b>Manufacturer:</b> ' + esc(c.manufacturer || '—') + ' · <b>Pack:</b> ' + esc(c.pack_size || '—') + ' · <b>Type:</b> ' + esc(c.med_type || '—') + '<br>';
-      if (c.alternatives && c.alternatives.length) extra += '<b>Alternatives:</b> ' + esc(c.alternatives.slice(0,3).join(', ')) + '<br>';
-      if (c.age_flag) extra += '<span style="color:var(--warn)"><b>Age check:</b> ' + esc(c.age_flag) + '</span><br>';
-      if (extra) html += '<div class="card" style="margin:6px 0 12px 24px; font-size:13px; background:var(--fg-soft)">' + extra + '</div>';
+      if (c.alternatives && c.alternatives.length) doctorExtra += '<b>Alternatives (same salt):</b> ' + esc(c.alternatives.slice(0,3).join(', ')) + '<br>';
+      if (c.age_flag) doctorExtra += '<span style="color:var(--warn)"><b>Age check:</b> ' + esc(c.age_flag) + '</span><br>';
+      var combined = extra + (doctorExtra ? '<div data-doctor' + (patientView ? ' hidden' : '') + ' style="margin-top:8px; padding-top:8px; border-top:1px solid var(--border)">' + doctorExtra + '</div>' : '');
+      if (combined) html += '<div class="card" style="margin:6px 0 12px 24px; font-size:13px; background:var(--fg-soft)">' + combined + '</div>';
     });
     if (!meds.length) html += '<p class="sub">Backend returned no medicines for this upload.</p>';
     html += '<div data-doctor' + (patientView ? ' hidden' : '') + '><details><summary>Doctor proof · match table</summary><table class="ds-table"><tbody>' +
@@ -655,6 +660,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     var score = Math.min(100, bad * 30 + part * 10 + Math.max(0, meds.length - 4) * 5);
     var band = score < 25 ? ['low', 'LOW'] : score < 55 ? ['mod', 'MODERATE'] : score < 80 ? ['high', 'HIGH'] : ['high', 'CRITICAL'];
     html = '<div class="riskbanner ' + band[0] + '">Risk ' + score + '/100 · ' + band[1] + ' — ' + (bad ? bad + (bad === 1 ? ' line needs' : ' lines need') + ' your eyes.' : 'all lines verified.') + '</div>' + html;
+    if (!patientView) html = '<div class="pill" style="margin-bottom:12px">Doctor mode — full registry details</div>' + html;
     res.innerHTML = html;
     bindExports(rows);
   }
@@ -671,42 +677,66 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     var bar = document.querySelector('.loadbar');
     bar.setAttribute('aria-busy', 'true');
     var pct = document.getElementById('loadPct');
-    var steps = [[18, 'Reading handwriting…'], [55, 'Verifying medicines…'], [88, 'Checking interactions…'], [100, 'Done — results below']];
+    // Fake steps stop at 88% — then wait on live so bar never sits at 100% idle
+    var steps = [[18, 'Reading handwriting…'], [55, 'Verifying medicines…'], [88, 'Calling AI verification…']];
     var live = null;
+    var liveDone = false, stepsDone = false;
     if (apiUp) {
       var fd = new FormData();
       Array.prototype.forEach.call(files, function (f) { fd.append('files', f, f.name); });
       live = fetch((API || '') + '/parse', { method: 'POST', body: fd })
         .then(function (r) { if (!r.ok) throw 0; return r.json(); })
         .catch(function () { return null; });
+      // if still pending after steps, switch to indeterminate + live wait message
+      live.then(function(){ liveDone = true; if(stepsDone) finishNow(); });
     }
+    function finishNow(){
+      // jump to 100% only when both steps and live are ready
+      bar.classList.remove('indet');
+      fill.style.width = '100%';
+      pct.textContent = '100%';
+      msg.textContent = 'Done — results below ';
+      msg.appendChild(pct);
+      setTimeout(function(){
+        if (live) {
+          live.then(function (payload) {
+            if (payload && payload.result) {
+              renderLive(payload);
+              var n = (payload.result.medications || []).length;
+              saveHist({ ts: new Date().toLocaleString(), label: n + (n === 1 ? ' medicine · live' : ' medicines · live'), payload: payload });
+              enableChat(JSON.stringify(payload.result).slice(0, 3000));
+              lastPayload = payload;
+            } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern', payload: null }); }
+            done();
+          });
+        } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern', payload: null }); done(); }
+      }, 300);
+    }
+    function done() { wrap.hidden = true; bar.classList.remove('indet'); fill.style.width = '0'; bar.removeAttribute('aria-busy'); pick.disabled = false; res.hidden = false; }
     var i = 0;
     (function next() {
-      if (i >= steps.length) return;
+      if (i >= steps.length) {
+        stepsDone = true;
+        if (apiUp && !liveDone) {
+          // steps finished but AI still working — show indeterminate shimmer
+          bar.classList.add('indet');
+          msg.textContent = 'Almost done — AI is still verifying… ';
+          msg.appendChild(pct);
+          // don't call finish yet, wait for liveDone
+          return;
+        }
+        finishNow();
+        return;
+      }
       fill.style.width = steps[i][0] + '%';
       pct.textContent = steps[i][0] + '%';
       msg.textContent = steps[i][1] + ' ';
       msg.appendChild(pct);
       i++;
-      if (i < steps.length) { setTimeout(next, 450); }
-      else { setTimeout(function () { finish(live); }, 600); }
+      setTimeout(next, 480);
     })();
   }
-  function finish(live) {
-    function done() { wrap.hidden = true; fill.style.width = '0'; document.querySelector('.loadbar').removeAttribute('aria-busy'); pick.disabled = false; res.hidden = false; }
-    if (live) {
-      live.then(function (payload) {
-        if (payload && payload.result) {
-          renderLive(payload);
-          var n = (payload.result.medications || []).length;
-          saveHist({ ts: new Date().toLocaleString(), label: n + (n === 1 ? ' medicine · live' : ' medicines · live'), payload: payload });
-          enableChat(JSON.stringify(payload.result).slice(0, 3000));
-          lastPayload = payload;
-        } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern', payload: null }); }
-        done();
-      });
-    } else { res.innerHTML = demoHTML; bindExports(ROWS); applyRole(); enableChat('sample result'); saveHist({ ts: new Date().toLocaleString(), label: 'demo pattern', payload: null }); done(); }
-  }
+  function finish(live) { /* kept for compat — not used */ }
   function applyRole() {
     document.querySelectorAll('[data-doctor]').forEach(function (e) { e.hidden = patientView; });
   }
@@ -767,13 +797,21 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
   function segPair(a, b, fn) {
     var ea = document.getElementById(a), eb = document.getElementById(b);
     ea.addEventListener('click', function () { ea.setAttribute('aria-pressed', 'true'); eb.setAttribute('aria-pressed', 'false'); fn(true); });
-    eb.addEventListener('click', function () { eb.setAttribute('aria-pressed', 'false'); ea.setAttribute('aria-pressed', 'true'); fn(false); });
+    eb.addEventListener('click', function () { ea.setAttribute('aria-pressed', 'false'); eb.setAttribute('aria-pressed', 'true'); fn(false); });
   }
   segPair('roleP', 'roleD', function (patient) {
     patientView = patient;
+    try { localStorage.setItem('rxcare-role', patient ? 'patient' : 'doctor'); } catch(e) {}
     applyRole();
+    // re-render live payload so doctor-only details appear without re-upload
+    if (lastPayload) renderLive(lastPayload);
   });
-  document.querySelectorAll('[data-doctor]').forEach(function (e) { e.hidden = true; });
+  function applyRoleInit(){
+    var rp=document.getElementById('roleP'), rd=document.getElementById('roleD');
+    if(!patientView){ rp.setAttribute('aria-pressed','false'); rd.setAttribute('aria-pressed','true'); }
+  }
+  applyRoleInit();
+  document.querySelectorAll('[data-doctor]').forEach(function (e) { e.hidden = patientView; });
   var fDec = document.getElementById('fontDec'), fStd = document.getElementById('fontStd'), fInc = document.getElementById('fontInc');
   function setFont(mode) {
     if (mode === 'std') root.removeAttribute('data-font'); else root.setAttribute('data-font', mode);
@@ -877,7 +915,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     d.textContent = text;
     document.getElementById('chatLog').appendChild(d);
   }
-  document.getElementById('chatSend').addEventListener('click', function () {
+  function doAsk(){
     var inp = document.getElementById('chatIn');
     var q = inp.value.trim();
     if (!q) return;
@@ -886,11 +924,14 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     if (!apiUp) { bubble('ai', 'Backend is offline — start it with: uvicorn api:app --port 8000'); return; }
     bubble('ai', '…');
     var log = document.getElementById('chatLog');
-    fetch((API || '') + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, context: lastCtx }) })
+    var mode = patientView ? 'patient' : 'doctor';
+    fetch((API || '') + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, context: lastCtx, mode: mode }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { log.lastChild.textContent = j.answer || 'No answer.'; })
       .catch(function () { log.lastChild.textContent = 'Chat failed — is the backend running?'; });
-  });
+  }
+  document.getElementById('chatSend').addEventListener('click', doAsk);
+  document.getElementById('chatIn').addEventListener('keydown', function(e){ if(e.key==='Enter') doAsk(); });
 })();
 </script>
 </body>
