@@ -432,7 +432,7 @@ def enhance_with_preocr(src_path: str, dst_path: str, mode: str = "quality") -> 
 
 
 def main():
-    st.title('Medical Prescription Parsing')
+    st.markdown('<div class="hero"><h1>🏥 Medical Prescription Parsing</h1><p>Scan a strip, or upload a prescription — verified against 254k Indian brands + world registry.</p></div>', unsafe_allow_html=True)
     sweep_stale_outputs()
     global parser, GEMINI_MODEL
     parser = JsonOutputParser(pydantic_object=PrescriptionInformations)

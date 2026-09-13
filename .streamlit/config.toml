@@ -1,14 +1,16 @@
-# Medical theme: calm clinical teal. Custom light + dark so tables and text
-# stay readable in both modes (no hardcoded HTML colors needed).
+# Medical theme: clinical blue-gray — most trusted for healthcare (awesome-streamlit-themes: Healthcare)
+# + IBM Plex-style radius, widget borders; teal fallback in dark mode.
 [theme]
 base = "light"
-primaryColor = "#0E7C7B"
+primaryColor = "#0066CC"
 font = "sans serif"
+showWidgetBorder = true
+borderRadius = "8px"
 
 [theme.light]
-backgroundColor = "#FFFFFF"
-secondaryBackgroundColor = "#EAF4F4"
-textColor = "#10231F"
+backgroundColor = "#FAFBFC"
+secondaryBackgroundColor = "#F1F4F7"
+textColor = "#2C3E50"
 
 [theme.dark]
 backgroundColor = "#0E1513"
