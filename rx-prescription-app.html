@@ -550,24 +550,38 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     var r = payload.result || {};
     var rows = [['Medicine', 'Dose', 'Match']];
     var html = '';
-    // Patient/doctor header (missing before — now matches backend PrescriptionInformations)
-    var patientLine = [r.patient_name, r.patient_age ? r.patient_age + 'y' : '', r.patient_gender].filter(Boolean).join(' · ');
-    var doctorLine = [r.doctor_name, r.doctor_license].filter(Boolean).join(' · ');
-    var dateLine = r.prescription_date ? String(r.prescription_date).slice(0, 10) : '';
-    if (patientLine || doctorLine || dateLine) {
-      html += '<div class="card" style="margin-bottom:12px"><b>Patient:</b> ' + esc(patientLine || '—') + '<br><b>Doctor:</b> ' + esc(doctorLine || '—') + '<br><b>Date:</b> ' + esc(dateLine || '—') + '</div>';
+    // Patient/doctor header — filter "Not available"
+    function isNA(s){ return !s || /^\s*not available\s*$/i.test(String(s)); }
+    var patientParts = [];
+    if (!isNA(r.patient_name)) patientParts.push(r.patient_name);
+    if (!isNA(r.patient_age) && String(r.patient_age).trim() !== '') patientParts.push(r.patient_age + 'y');
+    if (!isNA(r.patient_gender)) patientParts.push(r.patient_gender);
+    var doctorParts = [];
+    if (!isNA(r.doctor_name)) doctorParts.push(r.doctor_name);
+    if (!isNA(r.doctor_license)) doctorParts.push('Lic: ' + r.doctor_license);
+    var dateLine = (!isNA(r.prescription_date) ? String(r.prescription_date).slice(0, 10) : '');
+    if (patientParts.length || doctorParts.length || dateLine) {
+      html += '<div class="card" style="margin-bottom:12px"><b>Patient:</b> ' + esc(patientParts.join(' · ') || '—') + '<br><b>Doctor:</b> ' + esc(doctorParts.join(' · ') || '—') + '<br><b>Date:</b> ' + esc(dateLine || '—') + '</div>';
     }
-    if (r.additional_notes) {
-      var notes = String(r.additional_notes).replace(/<[^>]*>/g, ' ').slice(0, 600);
-      html += '<div class="card"><b>Notes:</b> ' + esc(notes) + '</div>';
+    if (r.additional_notes && !isNA(r.additional_notes)) {
+      var notes = String(r.additional_notes).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
+      if (notes.length > 800) notes = notes.slice(0, 800) + '…';
+      html += '<div class="card"><b>Notes / Instructions:</b><br>' + esc(notes) + '</div>';
     }
     meds.forEach(function (m, i) {
       var c = checks[i] || {};
       var st = c.status || '';
-      var ok = st.indexOf('Verified') === 0 || st.indexOf('Auto-corrected') === 0;
+      var ok = st.indexOf('Verified') === 0;
       var dose = [m.dosage, m.frequency, m.duration].filter(Boolean).join(' · ');
       rows.push([m.name || '', dose, st || '—']);
       html += '<div class="med"><span class="dot ' + (ok ? 'g' : 'r') + '" aria-hidden="true"></span><div><b>' + esc(m.name) + '</b><div class="d">' + esc(dose) + (c.composition ? ' · ' + esc(c.composition) : '') + '</div></div><span class="conf ' + (ok ? 'ok' : 'low') + '">' + esc(st.slice(0, 24) || '—') + '</span></div>';
+      // Indian DB details (was missing — now shows medicine_desc, side effects, pack etc.)
+      var extra = '';
+      if (c.medicine_desc) extra += '<b>What it is for:</b> ' + esc(String(c.medicine_desc).slice(0, 500)) + '<br>';
+      if (c.side_effects_db) extra += '<b>Side effects:</b> ' + esc(String(c.side_effects_db).slice(0, 500)) + '<br>';
+      if (c.drug_interactions_db && String(c.drug_interactions_db).trim().length > 10) extra += '<b>Interactions:</b> ' + esc(String(c.drug_interactions_db).slice(0, 500)) + '<br>';
+      if (c.manufacturer || c.pack_size) extra += '<b>Manufacturer:</b> ' + esc(c.manufacturer || '—') + ' · <b>Pack:</b> ' + esc(c.pack_size || '—') + ' · <b>Type:</b> ' + esc(c.med_type || '—') + '<br>';
+      if (extra) html += '<div class="card" style="margin:6px 0 12px 24px; font-size:13px; background:var(--fg-soft)">' + extra + '</div>';
     });
     if (!meds.length) html += '<p class="sub">Backend returned no medicines for this upload.</p>';
     html += '<div data-doctor' + (patientView ? ' hidden' : '') + '><details><summary>Doctor proof · match table</summary><table class="ds-table"><tbody>' +
