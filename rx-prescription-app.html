@@ -36,6 +36,7 @@
   --radius: 14px; --radius-lg: 18px;
 }
 html[data-theme="dark"] {
+  color-scheme: dark;
   --bg:      oklch(17% 0.012 240);
   --surface: oklch(21% 0.016 240);
   --fg:      oklch(94% 0.006 240);
@@ -47,7 +48,7 @@ html[data-font="lg"] body { font-size: 18px; }
 html[data-font="lg"] .med .d { font-size: 16px; }
 html[data-font="sm"] body { font-size: 14.5px; }
 *, *::before, *::after { box-sizing: border-box; }
-html { -webkit-text-size-adjust: 100%; }
+html { -webkit-text-size-adjust: 100%; color-scheme: light; }
 body {
   margin: 0; background: var(--bg); color: var(--fg);
   font-family: var(--font-body); font-size: var(--fs-body); line-height: 1.6;
@@ -193,6 +194,16 @@ h3 { font-family: var(--font-display); font-size: var(--fs-h3); font-weight: 650
 details { border: 1px solid var(--border); border-radius: 12px; padding: 10px 16px; margin-top: 12px; background: var(--surface); }
 summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px; }
 .warnbox { border: 1px solid color-mix(in oklch, var(--warn) 40%, var(--border)); background: color-mix(in oklch, var(--warn) 8%, var(--surface)); border-radius: 12px; padding: 14px 16px; font-size: 14px; margin-top: 14px; }
+.riskbanner { border-radius: 12px; padding: 12px 16px; margin: 12px 0; font-size: 14px; font-weight: 600; border: 1px solid; animation: rise 0.45s cubic-bezier(0.2, 0, 0, 1) both; }
+.riskbanner.low { background: color-mix(in oklch, var(--success) 12%, transparent); border-color: color-mix(in oklch, var(--success) 45%, var(--border)); color: var(--success); }
+.riskbanner.mod { background: color-mix(in oklch, var(--warn) 12%, transparent); border-color: color-mix(in oklch, var(--warn) 45%, var(--border)); color: var(--warn); }
+.riskbanner.high { background: color-mix(in oklch, var(--danger) 10%, transparent); border-color: color-mix(in oklch, var(--danger) 45%, var(--border)); color: var(--danger); }
+@media print {
+  .topnav, .hero, .toolbar, .drop, #loadWrap, .chat, [data-p="scan"], [data-p="hist"], .pagefoot, .hero-cta { display: none !important; }
+  body { background: var(--surface); }
+  .demo { border: 0; }
+  .med, .riskbanner { break-inside: avoid; }
+}
 @keyframes rise { from { opacity: 0; transform: translateY(8px); } to { opacity: 1; transform: none; } }
 .demo, .card { animation: rise 0.5s cubic-bezier(0.2, 0, 0, 1) both; }
 .js .rv { opacity: 0; transform: translateY(14px); }
@@ -268,6 +279,9 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
                 Choose files
               </label>
               <input type="file" id="filePick" accept="image/*,.pdf" multiple aria-label="Choose prescription files" />
+              <div class="row" style="justify-content: center; margin-top: 12px;">
+                <button class="btn btn-secondary" id="sampleBtn">Use sample scan</button>
+              </div>
               <div class="filechips" id="fileChips"></div>
               <div class="fileline" id="fileLine" role="status"></div>
               <div class="fileline" id="apiLine" role="status"><span aria-hidden="true">●</span> <span id="apiText">Checking local backend…</span></div>
@@ -278,6 +292,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
               <div class="skel"></div><div class="skel" style="height: 44px;"></div>
             </div>
             <div id="results" hidden>
+              <div class="riskbanner mod" id="riskBanner">Risk 34/100 · MODERATE — 1 line needs your eyes.</div>
               <div class="med"><span class="dot g" aria-hidden="true"></span><div><b>Dolo 650</b><div class="d">650 mg · twice a day · 5 days · Micro Labs · Paracetamol — fever and mild pain, after food.</div></div><span class="conf ok">96%</span></div>
               <div class="med"><span class="dot g" aria-hidden="true"></span><div><b>Augmentin 625</b><div class="d">625 mg · twice a day · 5 days · GSK — finish the full course; report a rash at once.</div></div><span class="conf ok">91%</span></div>
               <div class="med"><span class="dot r" aria-hidden="true"></span><div><b>Unreadable line</b><div class="d">Not in any registry — likely misread. Correct the spelling or scan the strip QR.</div></div><span class="conf low">22%</span></div>
@@ -543,6 +558,16 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       '</tbody></table></details></div>';
     html += '<div class="row" style="margin-top: 14px;"><button class="btn btn-primary" id="copyBtn">Copy results</button><button class="btn btn-secondary" id="csvBtn">Medications CSV</button><button class="btn btn-secondary" id="txtBtn">Report .txt</button></div>';
     html += '<div class="warnbox"><strong>Live backend result.</strong> Educational only — not medical advice. Only the manufacturer QR on your pack proves genuineness.</div>';
+    var bad = 0, part = 0;
+    checks.forEach(function (c) {
+      var st = c.status || '';
+      if (st.indexOf('Verified') === 0 || st.indexOf('Auto-corrected') === 0) return;
+      if (st.toLowerCase().indexOf('not found') === 0) bad++;
+      else part++;
+    });
+    var score = Math.min(100, bad * 30 + part * 10 + Math.max(0, meds.length - 4) * 5);
+    var band = score < 25 ? ['low', 'LOW'] : score < 55 ? ['mod', 'MODERATE'] : score < 80 ? ['high', 'HIGH'] : ['high', 'CRITICAL'];
+    html = '<div class="riskbanner ' + band[0] + '">Risk ' + score + '/100 · ' + band[1] + ' — ' + (bad ? bad + (bad === 1 ? ' line needs' : ' lines need') + ' your eyes.' : 'all lines verified.') + '</div>' + html;
     res.innerHTML = html;
     bindExports(rows);
   }
@@ -596,7 +621,18 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
   function applyRole() {
     document.querySelectorAll('[data-doctor]').forEach(function (e) { e.hidden = patientView; });
   }
-  pick.addEventListener('change', run);
+  pick.addEventListener('change', function () { run(); });
+  document.getElementById('sampleBtn').addEventListener('click', function () {
+    line.textContent = 'Loading sample scan…';
+    fetch('accuracy_test/rx_00030.png').then(function (r) {
+      if (!r.ok) throw 0;
+      return r.blob();
+    }).then(function (b) {
+      run([new File([b], 'rx_00030.png', { type: 'image/png' })]);
+    }).catch(function () {
+      line.textContent = 'Sample needs hosting — open via localhost or use Choose files.';
+    });
+  });
   function segPair(a, b, fn) {
     var ea = document.getElementById(a), eb = document.getElementById(b);
     ea.addEventListener('click', function () { ea.setAttribute('aria-pressed', 'true'); eb.setAttribute('aria-pressed', 'false'); fn(true); });

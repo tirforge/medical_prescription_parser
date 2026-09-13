@@ -24,6 +24,7 @@ data: indian_medicine_db.csv (43 MB, server-side only — never ships to browser
 - [x] Live `POST /parse` render with demo-pattern fallback
 - [x] Role toggle, A−/A/A+ text scaling, dark mode (persisted)
 - [x] Copy / CSV / TXT exports bound to live rows
+- [x] One-click sample scan, client-side risk banner, print stylesheet
 - [x] Local history (localStorage, confirm-before-clear)
 - [x] Chat panel wired to `POST /chat` (offline notice when backend down)
 - [x] Reduced-motion + keyboard tabs + 44px targets
