@@ -12,6 +12,7 @@ Endpoints:
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
+from fastapi.concurrency import run_in_threadpool
 from pathlib import Path
 from typing import List
 import tempfile, os, shutil
@@ -38,10 +39,20 @@ MODEL_FALLBACK_CHAIN = [
     "gemini-2.5-flash-lite",
 ]
 
+def _last_good():
+    m = os.environ.get("_LAST_GEMINI_MODEL", "").strip()
+    if m:
+        return m
+    try:
+        return open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_model.json")).read().strip()
+    except Exception:
+        return ""
+
 def _chain(primary: str = "") -> list[str]:
     p = (primary or os.environ.get("GEMINI_MODEL", "") or "").strip()
+    last = _last_good()
     seen, out = set(), []
-    for m in ([p] if p else []) + MODEL_FALLBACK_CHAIN:
+    for m in ([last] if last else []) + ([p] if p else []) + MODEL_FALLBACK_CHAIN:
         if m and m not in seen:
             seen.add(m); out.append(m)
     return out
@@ -105,6 +116,12 @@ async def chat(body: dict):
         raise HTTPException(status_code=400, detail="question required")
     if not os.environ.get("GOOGLE_API_KEY"):
         raise HTTPException(status_code=503, detail="GOOGLE_API_KEY not set on server")
+    # Heavy work (Indian-DB enrich + LLM) runs in a threadpool so the event
+    # loop stays responsive — /health and other requests never block on it.
+    return await run_in_threadpool(_chat_worker, question, context, mode)
+
+
+def _chat_worker(question: str, context: str, mode: str) -> dict:
     # Enrich with Indian DB lookup for any drug mentioned in question
     db_ctx = ""
     best_chk = None
@@ -195,13 +212,14 @@ async def chat(body: dict):
         "Never invent side effects not in DB/FDA label. Not medical advice — advise see doctor/pharmacist."
     )
     last_err = None
+    from prescription import _make_llm, _remember_last_model
     for model in _chain():
         try:
-            llm = ChatGoogleGenerativeAI(model=model, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+            llm = _make_llm(model)
             ans = llm.invoke([HumanMessage(content=prompt)]).content
             if isinstance(ans, list):
                 ans = " ".join(b.get("text","") for b in ans if isinstance(b, dict) and b.get("type")=="text")
-            os.environ["_LAST_GEMINI_MODEL"] = model
+            _remember_last_model(model)
             return {"answer": ans, "model": model}
         except Exception as e:
             msg = str(e).lower()
@@ -214,17 +232,10 @@ async def chat(body: dict):
 
 @app.post("/parse")
 async def parse(files: List[UploadFile] = File(...)):
-    try:
-        from prescription import (
-            get_prescription_informations,
-            dedupe_medications,
-            normalize_frequency,
-        )
-    except Exception as e:
-        raise HTTPException(status_code=503, detail=f"Vision stack unavailable: {e}")
     if not os.environ.get("GOOGLE_API_KEY"):
         raise HTTPException(status_code=503, detail="GOOGLE_API_KEY not set on server")
-    from indian_db import verify_medicine, find_alternatives
+    # Read all uploads quickly (async), then run the heavy parse in a threadpool
+    # so other requests (/health, /verify, /chat) never block on it.
     tmpdir = tempfile.mkdtemp(prefix="rx_api_")
     try:
         paths = []
@@ -234,52 +245,75 @@ async def parse(files: List[UploadFile] = File(...)):
             p = os.path.join(tmpdir, fname)
             with open(p, "wb") as out:
                 out.write(data)
-            # PDF → images via PyMuPDF (preocr already depends on it)
             if fname.lower().endswith(".pdf"):
-                try:
-                    from prescription import pdf_to_images as _pdf2img
-                    imgs = _pdf2img(data, tmpdir)
-                    if (imgs and len(imgs)): paths.extend(imgs)
-                    else: paths.append(p)
-                except Exception:
-                    paths.append(p)
+                # PDF → image rasterisation happens off the event loop too
+                paths.append({"ext": "pdf", "path": p, "tmp": tmpdir})
             else:
-                paths.append(p)
+                paths.append({"ext": "img", "path": p, "tmp": tmpdir})
         if not paths:
             raise HTTPException(status_code=400, detail="No valid images/PDF pages found")
-        res = get_prescription_informations(paths)
-        for m in res.get("medications", []):
-            m["frequency"] = normalize_frequency(m.get("frequency", ""))
-        res["medications"] = dedupe_medications(res.get("medications"))
-        # second-pass is already inside get_prescription_informations
-        checks = []
-        for m in res.get("medications", []):
-            chk = verify_medicine(m.get("name", ""))
-            # alternatives for this med
+        return await run_in_threadpool(_parse_worker, paths, tmpdir)
+    finally:
+        # _parse_worker keeps needed files; original upload dir is cleaned later
+        pass
+
+
+def _parse_worker(paths: list, tmpdir: str) -> dict:
+    from indian_db import verify_medicine, find_alternatives
+    # expand PDFs to page-images, collect real image paths
+    image_paths = []
+    for item in paths:
+        if item["ext"] == "pdf":
             try:
-                alts = find_alternatives(chk.get("composition","") or m.get("name",""), exclude=chk.get("match",""), n=3)
-                chk["alternatives"] = alts
+                from prescription import pdf_to_images as _pdf2img
+                with open(item["path"], "rb") as fh:
+                    data = fh.read()
+                imgs = _pdf2img(data, item["tmp"])
+                image_paths.extend(imgs or [item["path"]])
             except Exception:
-                chk["alternatives"] = []
-            # age-dosage simple check (educational only)
-            try:
-                age = res.get("patient_age")
-                if isinstance(age, str) and age.isdigit():
-                    age = int(age)
-                if isinstance(age, int) and age < 12:
-                    # flag high adult doses for children
-                    dose = (m.get("dosage") or "").lower()
-                    if any(x in dose for x in ["500 mg","650 mg","1g","1000 mg"]):
-                        chk["age_flag"] = f"High adult dose {m.get('dosage')} for age {age} — verify with pediatrician"
-            except Exception:
-                pass
-            checks.append(chk)
-        # confidence per field (high/medium/low) for UI
+                image_paths.append(item["path"])
+        else:
+            image_paths.append(item["path"])
+    if not image_paths:
+        raise HTTPException(status_code=400, detail="No valid images/PDF pages found")
+    from prescription import (
+        get_prescription_informations,
+        dedupe_medications,
+        normalize_frequency,
+        _add_confidence,
+    )
+    res = get_prescription_informations(image_paths)
+    # When all Gemini models quota-die AND easyocr is absent, the result is
+    # useless empty JSON that would silently return 200 — surface it as an
+    # actionable 503 so the frontend can show a real error.
+    if res.get("_fallback") == "none" or "Offline fallback failed" in res.get("additional_notes", ""):
+        raise HTTPException(status_code=503, detail="All vision models unavailable (Gemini quota exhausted). Try again in a few minutes.")
+    for m in res.get("medications", []):
+        m["frequency"] = normalize_frequency(m.get("frequency", ""))
+    res["medications"] = dedupe_medications(res.get("medications"))
+    checks = []
+    for m in res.get("medications", []):
+        chk = verify_medicine(m.get("name", ""))
         try:
-            from prescription import _add_confidence
-            res = _add_confidence(res, checks)
+            alts = find_alternatives(chk.get("composition","") or m.get("name",""), exclude=chk.get("match",""), n=3)
+            chk["alternatives"] = alts
+        except Exception:
+            chk["alternatives"] = []
+        try:
+            age = res.get("patient_age")
+            if isinstance(age, str) and age.isdigit():
+                age = int(age)
+            if isinstance(age, int) and age < 12:
+                dose = (m.get("dosage") or "").lower()
+                if any(x in dose for x in ["500 mg","650 mg","1g","1000 mg"]):
+                    chk["age_flag"] = f"High adult dose {m.get('dosage')} for age {age} — verify with pediatrician"
         except Exception:
             pass
-        return {"result": res, "verification": checks}
-    finally:
-        shutil.rmtree(tmpdir, ignore_errors=True)
+        checks.append(chk)
+    try:
+        res = _add_confidence(res, checks)
+    except Exception:
+        pass
+    import shutil as _sh
+    _sh.rmtree(tmpdir, ignore_errors=True)
+    return {"result": res, "verification": checks}

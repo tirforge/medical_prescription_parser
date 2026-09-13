@@ -26,3 +26,4 @@ test-results/
 playwright-report/
 playwright/.cache/
 eval_results.json
+last_model.json

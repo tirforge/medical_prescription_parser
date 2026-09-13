@@ -28,21 +28,26 @@ MODEL_FALLBACK_CHAIN = [
 def _chain():
     import os
     p = (os.environ.get("GEMINI_MODEL","") or "").strip()
+    last = ""
+    try:
+        last = open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "last_model.json")).read().strip() or os.environ.get("_LAST_GEMINI_MODEL","")
+    except Exception:
+        last = os.environ.get("_LAST_GEMINI_MODEL","")
     seen, out = set(), []
-    for m in ([p] if p else []) + MODEL_FALLBACK_CHAIN:
+    for m in ([last] if last else []) + ([p] if p else []) + MODEL_FALLBACK_CHAIN:
         if m and m not in seen:
             seen.add(m); out.append(m)
     return out
 
 def _llm_invoke_fallback(prompt: str):
     import os
-    from langchain_google_genai import ChatGoogleGenerativeAI
+    from prescription import _make_llm, _remember_last_model, _fallback_chain as _rx_chain
     last = None
-    for model in _chain():
+    for model in _rx_chain():
         try:
-            llm = ChatGoogleGenerativeAI(model=model, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+            llm = _make_llm(model)
             res = llm.invoke(prompt).content
-            os.environ["_LAST_GEMINI_MODEL"] = model
+            _remember_last_model(model)
             return res
         except Exception as e:
             msg=str(e).lower()
