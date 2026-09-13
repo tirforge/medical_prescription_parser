@@ -83,7 +83,6 @@ def verify_medicine(name: str) -> dict:
     return _verify_local(name)
 
 
-@st.cache_data(ttl=86400, show_spinner=False)
 def _verify_local(name: str) -> dict:
     result = {"extracted": name, "match": "", "composition": "", "manufacturer": "",
               "price": "", "pack_size": "", "med_type": "", "medicine_desc": "",

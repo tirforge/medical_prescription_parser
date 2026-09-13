@@ -14,3 +14,6 @@ __pycache__/
 Check_*/
 *.log
 *.bak
+*.db
+.streamlit/secrets.toml
+.venv/

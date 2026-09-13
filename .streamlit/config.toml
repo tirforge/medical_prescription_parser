@@ -5,7 +5,6 @@ base = "light"
 primaryColor = "#0066CC"
 font = "sans serif"
 showWidgetBorder = true
-borderRadius = "8px"
 
 [theme.light]
 backgroundColor = "#FAFBFC"

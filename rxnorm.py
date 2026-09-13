@@ -35,14 +35,17 @@ def rxnorm_lookup(name: str) -> dict:
         return info
     # 1. Exact-or-normalized search, then approximate fallback.
     data = _get("/rxcui.json", {"name": clean, "search": 2})
-    ids = (data or {}).get("idGroup", {}).get("rxnormId", []) if data else []
-    if not ids:
-        approx = _get("/approximateTerm.json", {"term": clean, "maxEntries": 1})
-        cands = (approx or {}).get("approximateGroup", {}).get("candidate", []) if approx else []
-        ids = [cands[0]["rxcui"]] if cands else []
-    if ids is None:
+    if data is None:
         info["status"] = "Lookup failed (network)"
         return info
+    ids = data.get("idGroup", {}).get("rxnormId", []) or []
+    if not ids:
+        approx = _get("/approximateTerm.json", {"term": clean, "maxEntries": 1})
+        if approx is None:
+            info["status"] = "Lookup failed (network)"
+            return info
+        cands = approx.get("approximateGroup", {}).get("candidate", []) or []
+        ids = [cands[0]["rxcui"]] if cands else []
     if not ids:
         info["status"] = "Not in world registry"
         return info

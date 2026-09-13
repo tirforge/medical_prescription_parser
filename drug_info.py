@@ -234,20 +234,15 @@ def simplify_all_for_patient(items: list) -> dict:
                 if isinstance(b, dict) and b.get("type") == "text"
             )
         out = {}
-        wanted = [n.lower() for n, _ in items]
+        wanted = set(n.lower() for n, _ in items)
         for line in str(raw).splitlines():
             line = re.sub(r"^\s*\d+[.)]\s*", "", line).strip().strip("-•* ").strip()
             if ":" not in line:
                 continue
             head, tail = line.split(":", 1)
-            head, tail = head.strip(), tail.strip()
-            if head.lower() in wanted and tail:
-                out[head.lower()] = tail[:300]
-            else:  # model renamed slightly — attach by order to first unmatched
-                for n in wanted:
-                    if n not in out:
-                        out[n] = tail[:300] if tail else out.get(n, "")
-                        break
-        return {n.lower(): out.get(n.lower(), "") for n, _ in items}
+            head, tail = head.strip().lower(), tail.strip()
+            if head in wanted and tail:
+                out[head] = tail[:300]
+        return out
     except Exception:
         return {}
