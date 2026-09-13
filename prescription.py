@@ -624,12 +624,12 @@ def main():
 
 
                     # Convert final_result to a list of tuples for display
-                    data = [(key, _strip_html(final_result[key]) if key == "additional_notes" else final_result[key])
+                    data = [(key, _strip_html(str(final_result[key])) if key == "additional_notes" else str(final_result[key]))
                             for key in final_result if key != 'medications']
                     df = pd.DataFrame(data, columns=["Field", "Value"])
 
-                    # Theme-aware tables (readable in light + dark mode)
-                    st.dataframe(df, width="stretch", hide_index=True)
+                    # Theme-aware tables (readable in light + dark mode) — Value as string to avoid Arrow type error
+                    st.dataframe(df.astype(str), width="stretch", hide_index=True)
 
                     # Display medications in a separate table with custom styling
                     checks = []
