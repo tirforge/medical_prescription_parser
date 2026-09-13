@@ -26,6 +26,26 @@ app.add_middleware(
 )
 
 
+MODEL_FALLBACK_CHAIN = [
+    "gemini-3.6-flash",
+    "gemini-3.6-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash",
+    "gemini-3.1-flash-lite",
+    "gemma-4-26b-a4b-it",
+    "gemma-4-31b-it",
+    "gemini-2.5-flash-lite",
+]
+
+def _chain(primary: str = "") -> list[str]:
+    p = (primary or os.environ.get("GEMINI_MODEL", "") or "").strip()
+    seen, out = set(), []
+    for m in ([p] if p else []) + MODEL_FALLBACK_CHAIN:
+        if m and m not in seen:
+            seen.add(m); out.append(m)
+    return out
+
 def _deps():
     out = {}
     for mod in ("fastapi", "streamlit", "pandas", "PIL",
@@ -36,6 +56,9 @@ def _deps():
         except Exception:
             out[mod] = False
     out["google_api_key"] = bool(os.environ.get("GOOGLE_API_KEY"))
+    out["gemini_model"] = os.environ.get("GEMINI_MODEL", MODEL_FALLBACK_CHAIN[0])
+    out["fallback_chain"] = _chain()
+    out["last_model"] = os.environ.get("_LAST_GEMINI_MODEL", "")
     return out
 
 
@@ -154,34 +177,39 @@ async def chat(body: dict):
         if m:
             drug = m.group(1)
             return {"answer": f"{drug} not found in Indian registry (254k brands) — may be a Bangladesh-local brand or misspelling. Please check the strip spelling, manufacturer and QR, and consult a pharmacist. Not medical advice."}
-    try:
-        from langchain_google_genai import ChatGoogleGenerativeAI
-        from langchain_core.messages import HumanMessage
-        llm = ChatGoogleGenerativeAI(
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
-            google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
-            temperature=0,
-        )
-        role_instruction = (
-            "You are answering a clinician. Use precise medical terminology, include salt composition, pack, manufacturer and alternatives when in DB, and cite side effects and interactions exactly as in DB/FDA. Still add disclaimer."
-            if mode == "doctor" else
-            "Answer helpfully and concisely in plain English for a patient. If DB gives side effects/composition, cite them in simple words."
-        )
-        prompt = (
-            f"Mode: {mode}\n"
-            f"Prescription context (may be empty): {context}\n"
-            f"Indian DB lookup for question terms:{db_ctx or ' (no DB hit)'}\n"
-            f"Question: {question}\n"
-            f"{role_instruction} "
-            "If DB says Not found, say so plainly and suggest checking the strip spelling or manufacturer. "
-            "Never invent side effects not in DB/FDA label. Not medical advice — advise see doctor/pharmacist."
-        )
-        ans = llm.invoke([HumanMessage(content=prompt)]).content
-        if isinstance(ans, list):
-            ans = " ".join(b.get("text", "") for b in ans if isinstance(b, dict) and b.get("type") == "text")
-        return {"answer": ans}
-    except Exception as e:
-        raise HTTPException(status_code=502, detail=f"Chat failed: {e}")
+    # chat with ordered fallback 3.6 -> 3.6-lite -> 3.5 -> 3.5-lite -> 3.1 -> 3.1-lite -> gemma
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.messages import HumanMessage
+    role_instruction = (
+        "You are answering a clinician. Use precise medical terminology, include salt composition, pack, manufacturer and alternatives when in DB, and cite side effects and interactions exactly as in DB/FDA. Still add disclaimer."
+        if mode == "doctor" else
+        "Answer helpfully and concisely in plain English for a patient. If DB gives side effects/composition, cite them in simple words."
+    )
+    prompt = (
+        f"Mode: {mode}\n"
+        f"Prescription context (may be empty): {context}\n"
+        f"Indian DB lookup for question terms:{db_ctx or ' (no DB hit)'}\n"
+        f"Question: {question}\n"
+        f"{role_instruction} "
+        "If DB says Not found, say so plainly and suggest checking the strip spelling or manufacturer. "
+        "Never invent side effects not in DB/FDA label. Not medical advice — advise see doctor/pharmacist."
+    )
+    last_err = None
+    for model in _chain():
+        try:
+            llm = ChatGoogleGenerativeAI(model=model, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+            ans = llm.invoke([HumanMessage(content=prompt)]).content
+            if isinstance(ans, list):
+                ans = " ".join(b.get("text","") for b in ans if isinstance(b, dict) and b.get("type")=="text")
+            os.environ["_LAST_GEMINI_MODEL"] = model
+            return {"answer": ans, "model": model}
+        except Exception as e:
+            msg = str(e).lower()
+            last_err = e
+            if any(k in msg for k in ("429","quota","rate","resource_exhausted","404","not found","503","500","502","overloaded","unavailable")):
+                continue
+            raise HTTPException(status_code=502, detail=f"Chat failed on {model}: {e}")
+    raise HTTPException(status_code=502, detail=f"Chat all models exhausted {MODEL_FALLBACK_CHAIN}: {last_err}")
 
 
 @app.post("/parse")

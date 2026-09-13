@@ -14,6 +14,44 @@ import streamlit as st
 FDA_LABEL_URL = "https://api.fda.gov/drug/label.json"
 TIMEOUT = 20
 
+MODEL_FALLBACK_CHAIN = [
+    "gemini-3.6-flash",
+    "gemini-3.6-flash-lite",
+    "gemini-3.5-flash",
+    "gemini-3.5-flash-lite",
+    "gemini-3.1-flash",
+    "gemini-3.1-flash-lite",
+    "gemma-4-26b-a4b-it",
+    "gemma-4-31b-it",
+]
+
+def _chain():
+    import os
+    p = (os.environ.get("GEMINI_MODEL","") or "").strip()
+    seen, out = set(), []
+    for m in ([p] if p else []) + MODEL_FALLBACK_CHAIN:
+        if m and m not in seen:
+            seen.add(m); out.append(m)
+    return out
+
+def _llm_invoke_fallback(prompt: str):
+    import os
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    last = None
+    for model in _chain():
+        try:
+            llm = ChatGoogleGenerativeAI(model=model, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+            res = llm.invoke(prompt).content
+            os.environ["_LAST_GEMINI_MODEL"] = model
+            return res
+        except Exception as e:
+            msg=str(e).lower()
+            last=e
+            if any(k in msg for k in ("429","quota","rate","resource_exhausted","404","not found","503","500","502","overloaded","unavailable")):
+                continue
+            raise
+    raise last if last else RuntimeError("all models exhausted")
+
 # Indian (INN) -> US (USAN) generic names: openFDA labels use US names.
 INN_TO_USAN = {
     "paracetamol": "acetaminophen",
@@ -156,15 +194,9 @@ def check_interactions(items: list) -> dict:
         return {"pairs": [], "status": "Need 2+ medicines to check combinations"}
     try:
         import os
-        from langchain_google_genai import ChatGoogleGenerativeAI
         key = os.environ.get("GOOGLE_API_KEY", "")
         if not key:
             return {"pairs": [], "status": "No API key — cannot screen combinations"}
-        llm = ChatGoogleGenerativeAI(
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-            google_api_key=key,
-            temperature=0,
-        )
         listed = "\n".join(f"{i + 1}. {n} ({c or 'composition unknown'})"
                            for i, (n, c) in enumerate(clean))
         prompt = (
@@ -176,7 +208,7 @@ def check_interactions(items: list) -> dict:
             "invent. If no significant interactions are known, reply with exactly: "
             "NONE\n\nMedicines:\n" + listed
         )
-        raw = llm.invoke(prompt).content or ""
+        raw = _llm_invoke_fallback(prompt) or ""
         if isinstance(raw, list):
             raw = " ".join(
                 b.get("text", "") for b in raw
@@ -212,15 +244,9 @@ def simplify_all_for_patient(items: list) -> dict:
         return {}
     try:
         import os
-        from langchain_google_genai import ChatGoogleGenerativeAI
         key = os.environ.get("GOOGLE_API_KEY", "")
         if not key:
             return {}
-        llm = ChatGoogleGenerativeAI(
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
-            google_api_key=key,
-            temperature=0,
-        )
         numbered = "\n".join(
             f"{i + 1}. {name}: {text[:900]}" for i, (name, text) in enumerate(items)
         )
@@ -230,7 +256,7 @@ def simplify_all_for_patient(items: list) -> dict:
             "format: DrugName: effect1, effect2, effect3. Only use what the text "
             "states — never add effects not in the text.\n\n" + numbered
         )
-        raw = (llm.invoke(prompt).content or "")
+        raw = (_llm_invoke_fallback(prompt) or "")
         if isinstance(raw, list):
             raw = " ".join(
                 b.get("text", "") for b in raw

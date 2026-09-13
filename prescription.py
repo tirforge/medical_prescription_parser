@@ -137,19 +137,57 @@ def age_dosage_flags(result: dict) -> list:
 
 
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY or os.environ.get("GOOGLE_API_KEY", "")
-# Vision models: free-tier quotas verified 2026-09-13 (RPD = req/day, resets midnight PT):
-#   gemma-4-26b-a4b-it / gemma-4-31b-it ... 30 RPM, 14,400 RPD  <- most generous
-#   gemini-3.1/3.5-flash-lite ................ 15 RPM, 500 RPD   <- runner-up
-#   gemini-2.5-flash(-lite), 3.x Flash ....... 5-10 RPM, 20 RPD <- tight
-# Override via GEMINI_MODEL env or the sidebar picker.
-MODEL_CHOICES = [
-    "gemini-3.6-flash",       # default: latest vision, free tier, best handwriting
-    "gemini-3.5-flash-lite",  # fallback: fast, 500/day
-    "gemma-4-26b-a4b-it",     # fallback: 14,400/day quota
+# Vision models ordered by preference then fallback on 429/404/5xx.
+# Free-tier RPD resets midnight PT. Override primary via GEMINI_MODEL env/sidebar.
+MODEL_FALLBACK_CHAIN = [
+    "gemini-3.6-flash",       # 1st: best handwriting (20 RPD free)
+    "gemini-3.6-flash-lite",  # 2nd: 3.6 lite
+    "gemini-3.5-flash",       # 3rd: 3.5
+    "gemini-3.5-flash-lite",  # 4th: 500 RPD free
+    "gemini-3.1-flash",       # 5th: 3.1
+    "gemini-3.1-flash-lite",  # 6th: 3.1 lite
+    "gemma-4-26b-a4b-it",     # 7th: 14,400 RPD free
     "gemma-4-31b-it",
     "gemini-2.5-flash-lite",
 ]
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", MODEL_CHOICES[0])
+MODEL_CHOICES = MODEL_FALLBACK_CHAIN  # keep sidebar compat
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", MODEL_FALLBACK_CHAIN[0])
+
+def _fallback_chain(primary: str = "") -> list[str]:
+    """Return ordered chain starting from primary then rest without dupes."""
+    primary = (primary or GEMINI_MODEL or "").strip()
+    seen, out = set(), []
+    for m in ([primary] if primary else []) + MODEL_FALLBACK_CHAIN:
+        if m and m not in seen:
+            seen.add(m)
+            out.append(m)
+    return out
+
+def _invoke_with_fallback(make_llm, invoke_fn, *, label: str = "gemini", retries_per_model: int = 1):
+    """Try models in fallback order on 429/404/5xx + not-found errors. Returns (result, used_model)."""
+    last_err = None
+    for model in _fallback_chain():
+        for attempt in range(retries_per_model):
+            try:
+                llm = make_llm(model)
+                res = invoke_fn(llm)
+                # stash which model succeeded for UI/health
+                import os as _os
+                _os.environ["_LAST_GEMINI_MODEL"] = model
+                return res, model
+            except Exception as e:
+                msg = str(e).lower()
+                last_err = e
+                retryable = any(k in msg for k in ("429", "quota", "rate", "resource_exhausted", "404", "not found", "503", "500", "502", "overloaded", "unavailable"))
+                if retryable:
+                    # try next model immediately (or retry same model if attempt==0 and we have retries)
+                    if attempt + 1 < retries_per_model:
+                        import time as _t; _t.sleep(0.6)
+                        continue
+                    break  # go to next model
+                # non-retryable (auth etc) — bubble up
+                raise
+    raise last_err if last_err else RuntimeError(f"{label}: all models exhausted {MODEL_FALLBACK_CHAIN}")
 set_debug(False)
 
 parser = None
@@ -169,18 +207,15 @@ def local_css(file_name):
 local_css("styles.css")
 
 def read_brand_from_strip(data: bytes) -> str:
-    """Read the brand name off a medicine strip/box photo (1 Gemini call)."""
+    """Read the brand name off a medicine strip/box photo (1 Gemini call) with fallback."""
     b64 = base64.b64encode(data).decode()
-    llm = ChatGoogleGenerativeAI(
-        model=GEMINI_MODEL,
-        google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
-        temperature=0,
-    )
     from langchain_core.messages import HumanMessage
-    out = llm.invoke([HumanMessage(content=[
+    def _make(m): return ChatGoogleGenerativeAI(model=m, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+    def _call(llm): return llm.invoke([HumanMessage(content=[
         {"type": "text", "text": "What is the brand/product name printed on this medicine strip or box? Reply with ONLY the name, nothing else."},
         {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}},
     ])])
+    out, _used = _invoke_with_fallback(_make, _call, label="strip")
     c = out.content
     if isinstance(c, list):
         c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
@@ -304,22 +339,13 @@ def image_model(inputs: dict) -> str | list[str] | dict:
     Prescription images:
     {images_content}
     """
-    msg = model.invoke(
-        [HumanMessage(
-            content=[
-                {"type": "text", "text": prompt},
-                {"type": "text", "text": parser.get_format_instructions() if parser else ""},
-                *image_urls
-            ]
-        )],
-    )
+    def _make(m): return ChatGoogleGenerativeAI(model=m, google_api_key=os.environ.get("GOOGLE_API_KEY"), temperature=0)
+    def _call(llm):
+        return llm.invoke([HumanMessage(content=[{"type": "text", "text": prompt}, {"type": "text", "text": parser.get_format_instructions() if parser else ""}, *image_urls])])
+    msg, _used = _invoke_with_fallback(_make, _call, label="vision")
     content = msg.content
     if isinstance(content, list):
-        # Thinking models (Gemma 4) return blocks — keep only final text for JSON parsing.
-        content = "\n".join(
-            b.get("text", "") for b in content
-            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
-        )
+        content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text" and b.get("text"))
     return content
 
 def _easyocr_fallback(image_paths: List[str]) -> dict:
@@ -367,9 +393,7 @@ def _second_pass_review(first: dict, image_paths: List[str]) -> dict:
         from langchain_google_genai import ChatGoogleGenerativeAI
         from langchain_core.messages import HumanMessage
         import base64
-        # reuse same vision model but as reviewer
-        llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
-        # encode first image for visual review (only first page to save quota)
+        # reuse vision model as reviewer with same fallback chain
         with open(image_paths[0], "rb") as f:
             b64 = base64.b64encode(f.read()).decode()
         prompt = (
@@ -377,11 +401,13 @@ def _second_pass_review(first: dict, image_paths: List[str]) -> dict:
             "Re-examine the prescription image and correct only clear misspellings of medication names vs the image. "
             "Do not invent. If unsure, keep original. Reply with corrected JSON only."
         )
-        out = llm.invoke([HumanMessage(content=[
+        def _make(m): return ChatGoogleGenerativeAI(model=m, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+        def _call(llm): return llm.invoke([HumanMessage(content=[
             {"type": "text", "text": prompt},
             {"type": "text", "text": parser.get_format_instructions() if parser else ""},
             {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
         ])])
+        out, _used = _invoke_with_fallback(_make, _call, label="review")
         txt = out.content
         if isinstance(txt, list):
             txt = "\n".join(b.get("text","") for b in txt if isinstance(b, dict) and b.get("type")=="text")
@@ -1122,9 +1148,11 @@ def main():
                         try:
                             from langchain_google_genai import ChatGoogleGenerativeAI
                             from langchain_core.messages import HumanMessage
-                            llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
                             ctx = json.dumps(final_result, default=str)[:3000]
-                            ans = llm.invoke([HumanMessage(content=f"Context prescription JSON: {ctx}\nQuestion: {q}\nAnswer concisely, not medical advice, cite composition if relevant.")]).content
+                            def _make(m): return ChatGoogleGenerativeAI(model=m, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+                            def _call(llm): return llm.invoke([HumanMessage(content=f"Context prescription JSON: {ctx}\nQuestion: {q}\nAnswer concisely, not medical advice, cite composition if relevant.")])
+                            _out, _used = _invoke_with_fallback(_make, _call, label="chat")
+                            ans = _out.content
                             if isinstance(ans, list): ans = " ".join(b.get("text","") for b in ans if isinstance(b,dict) and b.get("type")=="text")
                             st.chat_message("assistant").write(ans)
                             st.session_state.rx_chat.append(("assistant", ans))
