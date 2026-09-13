@@ -36,8 +36,11 @@ def _load_db():
                 if x.strip()
             )
             mfr = (row.get("manufacturer_name") or "").strip()
+            price = (row.get("price(₹)") or "").strip()
+            pack = (row.get("pack_size_label") or "").strip()
+            mtype = (row.get("type") or "").strip()
             active = (row.get("Is_discontinued") or "").strip().upper() != "TRUE"
-            brands.setdefault(base, []).append((full, comp, mfr, active))
+            brands.setdefault(base, []).append((full, comp, mfr, active, price, pack, mtype))
             for tok in set(re.split(r"[^a-z]+", comp.lower())):
                 if len(tok) >= 5:
                     entry = salts.setdefault(tok, [0, full])
@@ -53,6 +56,13 @@ def _best_entry(entries):
     return entries[0]
 
 
+def _entry_details(entry):
+    """Unpack a brand entry into display fields (price/pack/type included)."""
+    full, comp, mfr, _active, price, pack, mtype = entry
+    return {"match": full, "composition": comp, "manufacturer": mfr,
+            "price": price, "pack_size": pack, "med_type": mtype}
+
+
 @st.cache_data(ttl=86400, show_spinner=False)
 def verify_medicine(name: str) -> dict:
     """Check one medicine name against the offline Indian DB.
@@ -62,7 +72,9 @@ def verify_medicine(name: str) -> dict:
 
 @st.cache_data(ttl=86400, show_spinner=False)
 def _verify_local(name: str) -> dict:
-    result = {"extracted": name, "match": "", "composition": "", "manufacturer": "", "status": "Not checked"}
+    result = {"extracted": name, "match": "", "composition": "", "manufacturer": "",
+              "price": "", "pack_size": "", "med_type": "", "salt_count": 0,
+              "salt_example": "", "status": "Not checked"}
     try:
         brands, salts = _load_db()
     except FileNotFoundError:
@@ -76,8 +88,7 @@ def _verify_local(name: str) -> dict:
 
     # 1. Exact brand match
     if clean in brands:
-        full, comp, mfr, _ = _best_entry(brands[clean])
-        result.update(match=full, composition=comp, manufacturer=mfr,
+        result.update(_entry_details(_best_entry(brands[clean])),
                       status="Verified - brand in Indian DB")
         return result
 
@@ -87,6 +98,7 @@ def _verify_local(name: str) -> dict:
         if tok in salts:
             count, example = salts[tok]
             result.update(match=f"{count} products incl. {example[:60]}",
+                          salt_count=count, salt_example=example[:60],
                           composition=tok, status="Verified - salt in Indian DB")
             return result
 
@@ -94,10 +106,11 @@ def _verify_local(name: str) -> dict:
     bucket = [k for k in brands if k[:1] == clean[:1]] or list(brands)
     suggestions = difflib.get_close_matches(clean, bucket, n=3, cutoff=0.72)
     if suggestions:
-        full, comp, mfr, _ = _best_entry(brands[suggestions[0]])
-        result.update(match="; ".join(brands[s][0][0][:50] for s in suggestions[:3]),
-                      composition=comp, manufacturer=mfr,
-                      status="Suggestion - confirm spelling")
+        # Auto-correct: take the closest brand instead of asking the user.
+        best = _best_entry(brands[suggestions[0]])
+        details = _entry_details(best)
+        details["match"] = best[0]
+        result.update(details, status=f"Auto-corrected from '{(name or '').strip()}'")
     else:
         result["status"] = "Not found (likely BD-local brand)"
     return result

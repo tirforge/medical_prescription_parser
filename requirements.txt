@@ -3,6 +3,7 @@ streamlit
 pandas
 pydantic
 python-dotenv
+requests
 
 # Gemini Integration (free vision model)
 langchain
@@ -11,3 +12,9 @@ langchain-google-genai
 
 # Image Processing
 Pillow
+
+# Preprocessing (local denoise + deskew, no API key)
+preocr[layout-refinement]
+
+# Clipboard image paste
+streamlit-paste-button

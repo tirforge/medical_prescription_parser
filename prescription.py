@@ -16,14 +16,40 @@ try:
 except ImportError:
     GOOGLE_API_KEY = ""
 import streamlit as st
+import streamlit.components.v1 as components
 import pandas as pd
 import shutil
+import json
+from PIL import Image
+try:
+    import preocr  # pip install "preocr[layout-refinement]" — local denoise + deskew, no key needed
+    HAS_PREOCR = True
+except ImportError:
+    preocr = None
+    HAS_PREOCR = False
+try:
+    from streamlit_paste_button import paste_image_button
+    HAS_PASTE = True
+except ImportError:
+    paste_image_button = None
+    HAS_PASTE = False
 from indian_db import verify_medicine as check_medicine_online
+from drug_info import get_drug_safety, simplify_all_for_patient
 
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY or os.environ.get("GOOGLE_API_KEY", "")
-# Free vision model valid Sept 2026: gemini-2.5-flash (2.0-flash retired June 1, 2026).
-# Lite fallback: gemini-2.5-flash-lite. Note 2.5-flash retires Oct 20, 2026 -> then gemini-3.5-flash.
-GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+# Vision models: free-tier quotas verified 2026-09-13 (RPD = req/day, resets midnight PT):
+#   gemma-4-26b-a4b-it / gemma-4-31b-it ... 30 RPM, 14,400 RPD  <- most generous
+#   gemini-3.1/3.5-flash-lite ................ 15 RPM, 500 RPD   <- runner-up
+#   gemini-2.5-flash(-lite), 3.x Flash ....... 5-10 RPM, 20 RPD <- tight
+# Override via GEMINI_MODEL env or the sidebar picker.
+MODEL_CHOICES = [
+    "gemini-3.5-flash-lite",  # default: fast + accurate, 500/day
+    "gemma-4-26b-a4b-it",     # slower but 14,400/day quota
+    "gemma-4-31b-it",         # max quality, 14,400/day quota
+    "gemini-2.5-flash-lite",
+    "gemini-2.5-flash",
+]
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", MODEL_CHOICES[0])
 set_debug(False)
 
 parser = None
@@ -153,7 +179,14 @@ def image_model(inputs: dict) -> str | list[str] | dict:
             ]
         )],
     )
-    return msg.content
+    content = msg.content
+    if isinstance(content, list):
+        # Thinking models (Gemma 4) return blocks — keep only final text for JSON parsing.
+        content = "\n".join(
+            b.get("text", "") for b in content
+            if isinstance(b, dict) and b.get("type") == "text" and b.get("text")
+        )
+    return content
 
 def get_prescription_informations(image_paths: List[str]) -> dict:
     global parser
@@ -217,9 +250,128 @@ def build_review_flags(result: dict, checks: list) -> list:
         nm = c.get("extracted", "")
         if AMBIGUOUS_SUFFIX.search(nm):
             flags.append(f"'{nm}': ambiguous suffix (-D/-Plus/-SR etc.) - confirm against the strip.")
-        if c.get("status", "").startswith(("Suggestion", "Not found")):
+        if c.get("status", "").startswith("Not found"):
             flags.append(f"'{nm}': {c['status']}.")
     return flags
+
+
+def _strip_html(text: str) -> str:
+    """Remove simple HTML tags added for Streamlit display so clipboard gets plain text."""
+    if not isinstance(text, str):
+        return str(text) if text is not None else ""
+    clean = re.sub(r"<br\s*/?>", "\n", text, flags=re.I)
+    clean = re.sub(r"</?(ul|li|p|b|i|br)[^>]*>", "", clean, flags=re.I)
+    return clean.strip()
+
+
+def format_results_for_clipboard(result: dict, checks: list, review_flags: list) -> str:
+    """Plain-text summary users can paste into notes / EHR. Stable field order."""
+    lines = ["Medical Prescription Parsing Result", ""]
+    lines.append(
+        f"Patient: {result.get('patient_name', '')} | "
+        f"Age: {result.get('patient_age', '')} | "
+        f"Gender: {result.get('patient_gender', '')}"
+    )
+    lines.append(
+        f"Doctor: {result.get('doctor_name', '')} "
+        f"(License: {result.get('doctor_license', '')})"
+    )
+    lines.append(f"Date: {result.get('prescription_date', '')}")
+    lines.append("")
+    lines.append("Medications:")
+    meds = result.get("medications") or []
+    if not meds:
+        lines.append("- None found")
+    for i, m in enumerate(meds, 1):
+        lines.append(
+            f"{i}. {m.get('name', '')} - {m.get('dosage', '')}, "
+            f"{m.get('frequency', '')}, {m.get('duration', '')}"
+        )
+    lines.append("")
+    if checks:
+        lines.append("Verification (Indian DB):")
+        for c in checks:
+            lines.append(
+                f"- {c.get('extracted', '')} -> {c.get('match') or '-'} "
+                f"({c.get('status', '')})"
+            )
+        lines.append("")
+    notes = _strip_html(result.get("additional_notes", ""))
+    if notes:
+        lines.append("Notes:")
+        lines.append(notes)
+        lines.append("")
+    if review_flags:
+        lines.append("Review flags:")
+        for flag in review_flags:
+            lines.append(f"- {flag}")
+    else:
+        lines.append("Review flags: none - all sanity checks passed.")
+    return "\n".join(lines)
+
+
+def render_copy_button(text: str, button_text: str = "Copy to Clipboard", key: str = "main"):
+    """Client-side copy button. Uses navigator.clipboard with textarea fallback.
+    Works on localhost and HTTPS. `st.code` below also gives a native copy icon."""
+    safe_js = json.dumps(text or "")
+    # NOTE: key is interpolated into HTML ids only (alphanumeric expected).
+    safe_key = re.sub(r"[^a-zA-Z0-9_-]", "", key or "main")
+    html = f"""
+    <div style="margin: 8px 0;">
+      <button id="copy-btn-{safe_key}" style="padding:8px 14px;border-radius:8px;border:1px solid #ccc;cursor:pointer;font-size:14px;">📋 {button_text}</button>
+      <span id="copy-status-{safe_key}" style="margin-left:8px;font-size:13px;color:green;"></span>
+      <script>
+        (function() {{
+          const btn = document.getElementById("copy-btn-{safe_key}");
+          const status = document.getElementById("copy-status-{safe_key}");
+          const payload = {safe_js};
+          async function copyText() {{
+            try {{
+              if (navigator.clipboard && window.isSecureContext) {{
+                await navigator.clipboard.writeText(payload);
+              }} else {{
+                const ta = document.createElement("textarea");
+                ta.value = payload;
+                ta.style.position = "fixed";
+                ta.style.opacity = "0";
+                document.body.appendChild(ta);
+                ta.select();
+                document.execCommand("copy");
+                document.body.removeChild(ta);
+              }}
+              status.textContent = "Copied!";
+              setTimeout(() => {{ status.textContent = ""; }}, 2000);
+            }} catch (e) {{
+              status.style.color = "red";
+              status.textContent = "Copy failed - use the code block copy icon.";
+            }}
+          }}
+          btn.addEventListener("click", copyText);
+        }})();
+      </script>
+    </div>
+    """
+    components.html(html, height=70)
+
+
+def enhance_with_preocr(src_path: str, dst_path: str, mode: str = "quality") -> tuple:
+    """Denoise + deskew via the preocr PyPI package (local, no API key).
+    Binarization (otsu) is skipped on purpose — Gemini reads grayscale better.
+    Returns (path_to_send_to_model, meta). Never raises — falls back to original."""
+    if not HAS_PREOCR:
+        return src_path, {"applied_steps": [], "skipped_steps": ["preocr not installed"], "auto_detected": False}
+    try:
+        import warnings
+        warnings.filterwarnings("ignore")
+        out, meta = preocr.prepare_for_ocr(
+            src_path, steps=["denoise", "deskew"], mode=mode, return_meta=True
+        )
+        if isinstance(out, list):
+            out = out[0]
+        Image.fromarray(out).save(dst_path)
+        return dst_path, meta
+    except Exception as e:
+        return src_path, {"applied_steps": [], "skipped_steps": [f"enhance failed: {e}"], "auto_detected": False}
 
 
 def main():
@@ -227,22 +379,72 @@ def main():
     global parser
     parser = JsonOutputParser(pydantic_object=PrescriptionInformations)
     #st.header('Prescription Processing')
-    uploaded_file = st.file_uploader("Upload a Prescription image", type=["png", "jpg", "jpeg"])
-    if uploaded_file is not None:
+    uploaded_files = st.file_uploader(
+        "Upload Prescription image(s) — multi-page supported",
+        type=["png", "jpg", "jpeg"],
+        accept_multiple_files=True,
+    )
+
+    pasted_image = None
+    with st.expander("📋 Or paste an image from clipboard", expanded=False):
+        if HAS_PASTE:
+            st.caption("Copy an image (Ctrl+C), then click the button.")
+            paste_result = paste_image_button("📋 Paste prescription image")
+            if paste_result and paste_result.image_data is not None:
+                pasted_image = paste_result.image_data
+                st.image(pasted_image, caption="Pasted image", width="stretch")
+        else:
+            st.caption("Paste support not installed. Run: pip install streamlit-paste-button")
+
+    enhance = st.checkbox(
+        "✨ Enhance images (preocr: denoise + deskew, runs locally)",
+        value=True,
+        help="Cleans noise and straightens the photo before Gemini reads it. Binarization is skipped — Gemini reads grayscale better.",
+    )
+    if enhance and not HAS_PREOCR:
+        st.warning('preocr not installed — images will be sent as-is. Run: pip install "preocr[layout-refinement]"')
+
+    inputs: list = []  # [(filename, bytes)]
+    for f in uploaded_files or []:
+        inputs.append((f.name, f.getvalue()))
+    if pasted_image is not None:
+        import io as _io
+        buf = _io.BytesIO()
+        pasted_image.convert("RGB").save(buf, format="PNG")
+        inputs.append((f"pasted_{datetime.now().strftime('%H%M%S')}.png", buf.getvalue()))
+
+    if inputs:
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        filename = uploaded_file.name.split('.')[0].replace(' ', '_')
-        output_folder = os.path.join(".", f"Check_{filename}_{timestamp}")
+        first = inputs[0][0].split(".")[0].replace(" ", "_")
+        suffix = f"{first}_x{len(inputs)}" if len(inputs) > 1 else first
+        output_folder = os.path.join(".", f"Check_{suffix}_{timestamp}")
         os.makedirs(output_folder, exist_ok=True)
 
-        check_path = os.path.join(output_folder, uploaded_file.name)
-        with open(check_path, "wb") as f:
-            f.write(uploaded_file.getbuffer())
+        saved_paths: list = []
+        for name, data in inputs:
+            p = os.path.join(output_folder, name)
+            with open(p, "wb") as f:
+                f.write(data)
+            saved_paths.append(p)
 
-        with st.expander("Prescription Image", expanded=False):
-            st.image(uploaded_file, caption='Uploaded Prescription Image.', width='stretch')
+        if enhance and HAS_PREOCR:
+            model_paths: list = []
+            with st.spinner("Enhancing images (denoise + deskew)..."):
+                for p in saved_paths:
+                    base, _ext = os.path.splitext(p)
+                    final_path, meta = enhance_with_preocr(p, f"{base}_enhanced.png")
+                    model_paths.append(final_path)
+                    applied = ", ".join(meta.get("applied_steps", [])) or "none"
+                    skipped = ", ".join(str(s) for s in meta.get("skipped_steps", []))
+                    st.caption(f"{os.path.basename(p)} → applied: {applied}" + (f" | skipped: {skipped}" if skipped else ""))
+        else:
+            model_paths = saved_paths
 
-        with st.spinner('Processing Prescription...'):  
-            final_result = get_prescription_informations([check_path])           
+        with st.expander(f"Prescription Images ({len(saved_paths)})", expanded=False):
+            st.image(saved_paths, caption=[os.path.basename(p) for p in saved_paths], width="stretch")
+
+        with st.spinner('Processing Prescription...'):
+            final_result = get_prescription_informations(model_paths)           
             # Process and display results
             if 'additional_notes' in final_result:
                 additional_notes = final_result['additional_notes']
@@ -289,11 +491,57 @@ def main():
                     'Indian DB match': c['match'] or '-',
                     'Composition': c.get('composition', '') or '-',
                     'Manufacturer': c.get('manufacturer', '') or '-',
+                    'Pack': c.get('pack_size', '') or '-',
+                    'Type': c.get('med_type', '') or '-',
                     'Status': c['status'],
                 } for c in checks])
                 st.subheader("Medicine Verification (Indian DB)")
                 st.write(verify_df.to_html(classes='custom-table', index=False, escape=False), unsafe_allow_html=True)
-                st.caption("Source: open Indian Medicine Dataset (~254k brands). 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
+                st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
+
+                # Side effects & safety: full Indian data + openFDA label info.
+                # Fast path: FDA lookups run in parallel, ONE Gemini call simplifies all.
+                st.subheader("Side Effects & Safety (Indian data + openFDA)")
+                st.warning("⚠️ Educational only — not medical advice. Always verify with a doctor or pharmacist.")
+                with st.spinner("Looking up side effects..."):
+                    from concurrent.futures import ThreadPoolExecutor
+                    with ThreadPoolExecutor(max_workers=6) as ex:
+                        safety_list = list(ex.map(
+                            lambda mc: get_drug_safety(mc[0].get("name", ""), mc[1].get("composition", "")),
+                            zip(final_result["medications"], checks),
+                        ))
+                    simple_map = simplify_all_for_patient([
+                        (m.get("name", ""), s.get("side_effects", ""))
+                        for m, s in zip(final_result["medications"], safety_list)
+                    ])
+                    for m, c, safety in zip(final_result["medications"], checks, safety_list):
+                        mname = m.get("name", "")
+                        with st.expander(f"{mname} — {safety['status']}", expanded=False):
+                            if c.get("salt_count"):
+                                st.markdown(
+                                    f"**Indian DB:** salt '{c.get('composition')}' found in "
+                                    f"{c['salt_count']} products "
+                                    f"(e.g. {c.get('salt_example') or '-'})"
+                                )
+                            else:
+                                st.markdown(
+                                    f"**Indian DB:** {c.get('match') or '-'}  \n"
+                                    f"Composition: {c.get('composition') or '-'}  \n"
+                                    f"Manufacturer: {c.get('manufacturer') or '-'}  \n"
+                                    f"Pack: {c.get('pack_size') or '-'} | Type: {c.get('med_type') or '-'}"
+                                )
+                            if safety.get("boxed_warning"):
+                                st.error(f"Boxed warning: {safety['boxed_warning']}")
+                            simple = (simple_map.get((mname or '').lower()) or "").strip()
+                            if simple:
+                                st.markdown(f"**Common side effects:** {simple}")
+                            elif safety.get("side_effects"):
+                                st.markdown(f"**Side effects:** {safety['side_effects'][:300]}")
+                            else:
+                                st.caption("No FDA side-effect entry (common for India-local brands).")
+                            if safety.get("source_url"):
+                                st.markdown(f"[Full label on DailyMed]({safety['source_url']}) · Source: {safety['source']}")
+                            st.caption(f"Prescribed: {m.get('dosage','')} | {m.get('frequency','')} | {m.get('duration','')}")
 
             # Human-review flags: never silently fix, always surface
             review_flags = build_review_flags(final_result, checks)
@@ -301,6 +549,18 @@ def main():
                 st.warning(f"Please review: {flag}")
             if not review_flags:
                 st.success("All sanity checks passed - no review flags.")
+
+            # Copy to clipboard: plain-text summary + JSON. st.code gives a
+            # native copy icon; the button below is an explicit one-click copy.
+            st.subheader("Copy Results")
+            clipboard_text = format_results_for_clipboard(final_result, checks, review_flags)
+            render_copy_button(clipboard_text, button_text="Copy to Clipboard", key="rx_text")
+            st.code(clipboard_text, language="markdown")
+
+            with st.expander("JSON (for copy/paste into other tools)", expanded=False):
+                json_text = json.dumps(final_result, indent=2, default=str)
+                render_copy_button(json_text, button_text="Copy JSON", key="rx_json")
+                st.code(json_text, language="json")
 
         # Delete temp folder
         remove_temp_folder(output_folder)

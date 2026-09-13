@@ -8,16 +8,22 @@ div[data-testid="stExpander"] div[role="button"] p {
     width: 100%;
     border-collapse: collapse;
     margin: 20px 0;
+    background: #ffffff;
+    color: #111111;
 }
 
 .custom-table th, .custom-table td {
-    border: 1px solid #ddd;
+    border: 1px solid #888888;
     padding: 8px;
     text-align: left;
+    color: #111111;
+    background: #ffffff;
 }
 
 .custom-table th {
-    background-color: #f2f2f2;
+    background-color: #dbe7f3;
+    font-weight: bold;
+    color: #111111;
 }
 
 .stTable {
