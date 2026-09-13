@@ -21,10 +21,12 @@ Kitrum, HTD, Aufait). Nothing below is implemented yet.
       DONE 2026-09-13.
 - [x] **Page identity** (title/icon/about menu). DONE 2026-09-13.
 - [x] **Sidebar** (model picker, key input, about, disclaimer). DONE 2026-09-13.
-- [ ] **Tabs**: `🔍 Scan Medicine | 📄 Prescription | 📜 History` instead of
-      one endless scroll. (Scan exists as a top expander for now.)
+- [x] **Tabs**: `🔍 Scan Medicine | 📄 Prescription | 📜 History`. DONE 2026-09-13.
 - [x] **Progress feedback** (`st.status` stages) + **metric cards**. DONE 2026-09-13.
 - [x] **Raw-HTML tables → `st.dataframe`** (theme-aware). DONE 2026-09-13.
+- [x] **Sample-image button** (select from `accuracy_test/`). DONE 2026-09-13.
+- [x] **Export** (CSV + TXT report + Print-as-PDF tip). DONE 2026-09-13.
+- [x] **History tab** (session, 20 entries, view/clear). DONE 2026-09-13.
 
 ## Phase 2 — Healthcare UX (what top medical apps do)
 

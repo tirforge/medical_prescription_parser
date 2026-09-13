@@ -451,8 +451,14 @@ def main():
             os.environ["GOOGLE_API_KEY"] = key_in.strip()
         st.divider()
         st.caption("⚠️ Educational only — not medical advice. Free-tier APIs may retain data; real patient data belongs on a paid tier.")
-    #st.header('Prescription Processing')
-    with st.expander("🔍 Scan a Medicine — genuine check + full data", expanded=False):
+    if "history" not in st.session_state:
+        st.session_state.history = []  # [{ts, patient, meds, raw}]
+    if "sample_choice" not in st.session_state:
+        st.session_state.sample_choice = None
+
+    tab_scan, tab_rx, tab_hist = st.tabs(["🔍 Scan Medicine", "📄 Prescription", "📜 History"])
+
+    with tab_scan:
         st.caption("Type a name or snap the strip. Checks Indian registry + world registry (RxNorm) + side effects.")
         st.warning("Registry checks catch wrong spellings and fictitious makers, but only the manufacturer's QR on YOUR pack proves genuineness.")
         scan_name = st.text_input("Medicine name", placeholder="e.g. Dolo 650", key="scan_name")
@@ -514,47 +520,68 @@ def main():
                     "[CDSCO spurious-drug guidance](https://cdsco.gov.in/opencms/opencms/en/consumer/Guidelines-for-Spurious-Drugs)"
                 )
 
-    uploaded_files = st.file_uploader(
-        "Upload Prescription image(s) — multi-page supported",
-        type=["png", "jpg", "jpeg"],
-        accept_multiple_files=True,
-    )
-    pasted_image = None
-    with st.expander("📋 Or paste an image from clipboard", expanded=False):
-        if HAS_PASTE:
-            st.caption("Copy an image (Ctrl+C), then click the button.")
-            paste_result = paste_image_button("📋 Paste prescription image")
-            if paste_result and paste_result.image_data is not None:
-                pasted_image = paste_result.image_data
-                st.image(pasted_image, caption="Pasted image", width="stretch")
-        else:
-            st.caption("Paste support not installed. Run: pip install streamlit-paste-button")
+    with tab_rx:
+        st.caption("Upload, paste, or try a sample — same parser.")
+        c1, c2 = st.columns([3, 1])
+        with c2:
+            samples = sorted(glob.glob("accuracy_test/*.*"))
+            # filter to images
+            samples = [s for s in samples if s.lower().endswith((".png", ".jpg", ".jpeg"))]
+            sample = st.selectbox("Try a sample", ["—"] + [os.path.basename(s) for s in samples], key="sample_sel")
+            use_sample = st.button("▶️ Use sample", key="use_sample")
+        uploaded_files = st.file_uploader(
+            "Upload Prescription image(s) — multi-page supported",
+            type=["png", "jpg", "jpeg"],
+            accept_multiple_files=True,
+        )
+        sample_bytes = None
+        sample_name = None
+        if use_sample and sample != "—":
+            p = os.path.join("accuracy_test", sample)
+            if os.path.exists(p):
+                with open(p, "rb") as f:
+                    sample_bytes = f.read()
+                sample_name = sample
+                st.info(f"Sample loaded: {sample}")
+                st.image(sample_bytes, caption=sample, width="stretch")
+        pasted_image = None
+        with st.expander("📋 Or paste an image from clipboard", expanded=False):
+            if HAS_PASTE:
+                st.caption("Copy an image (Ctrl+C), then click the button.")
+                paste_result = paste_image_button("📋 Paste prescription image")
+                if paste_result and paste_result.image_data is not None:
+                    pasted_image = paste_result.image_data
+                    st.image(pasted_image, caption="Pasted image", width="stretch")
+            else:
+                st.caption("Paste support not installed. Run: pip install streamlit-paste-button")
 
-    enhance = st.checkbox(
-        "✨ Enhance images (preocr: denoise + deskew, runs locally)",
-        value=True,
-        help="Cleans noise and straightens the photo before Gemini reads it. Binarization is skipped — Gemini reads grayscale better.",
-    )
-    if enhance and not HAS_PREOCR:
-        st.warning('preocr not installed — images will be sent as-is. Run: pip install "preocr[layout-refinement]"')
+        enhance = st.checkbox(
+            "✨ Enhance images (preocr: denoise + deskew, runs locally)",
+            value=True,
+            help="Cleans noise and straightens the photo before Gemini reads it. Binarization is skipped — Gemini reads grayscale better.",
+        )
+        if enhance and not HAS_PREOCR:
+            st.warning('preocr not installed — images will be sent as-is. Run: pip install "preocr[layout-refinement]"')
 
-    inputs: list = []  # [(filename, bytes)]
-    for f in uploaded_files or []:
-        inputs.append((f.name, f.getvalue()))
-    if pasted_image is not None:
-        import io as _io
-        buf = _io.BytesIO()
-        pasted_image.convert("RGB").save(buf, format="PNG")
-        inputs.append((f"pasted_{datetime.now().strftime('%H%M%S')}.png", buf.getvalue()))
+        inputs: list = []  # [(filename, bytes)]
+        for f in uploaded_files or []:
+            inputs.append((f.name, f.getvalue()))
+        if sample_bytes:
+            inputs.append((sample_name, sample_bytes))
+        if pasted_image is not None:
+            import io as _io
+            buf = _io.BytesIO()
+            pasted_image.convert("RGB").save(buf, format="PNG")
+            inputs.append((f"pasted_{datetime.now().strftime('%H%M%S')}.png", buf.getvalue()))
 
-    if inputs:
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        first = inputs[0][0].split(".")[0].replace(" ", "_")
-        suffix = f"{first}_x{len(inputs)}" if len(inputs) > 1 else first
-        output_folder = os.path.join(".", f"Check_{suffix}_{timestamp}")
-        os.makedirs(output_folder, exist_ok=True)
+        if inputs:
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            first = inputs[0][0].split(".")[0].replace(" ", "_")
+            suffix = f"{first}_x{len(inputs)}" if len(inputs) > 1 else first
+            output_folder = os.path.join(".", f"Check_{suffix}_{timestamp}")
+            os.makedirs(output_folder, exist_ok=True)
 
-        saved_paths: list = []
+            saved_paths: list = []
         for name, data in inputs:
             p = os.path.join(output_folder, name)
             with open(p, "wb") as f:
@@ -735,8 +762,40 @@ def main():
                 render_copy_button(json_text, button_text="Copy JSON", key="rx_json")
                 st.code(json_text, language="json")
 
+            # Export CSV/PDF
+            st.subheader("Export")
+            import io as _io2
+            # CSV of medications
+            med_csv = pd.DataFrame(final_result.get("medications", [])).to_csv(index=False)
+            st.download_button("⬇️ Download medications CSV", med_csv, file_name=f"rx_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="dl_csv")
+            # Printable text report (for Save as PDF via browser)
+            report = clipboard_text + "\n\n---\nVerification:\n" + "\n".join(f"{c['extracted']} -> {c['match']} ({c['status']})" for c in checks)
+            st.download_button("⬇️ Download report (TXT)", report, file_name=f"rx_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="dl_txt")
+            st.caption("Tip: Print this page (Ctrl+P) → Save as PDF for a formatted report.")
+
+            # Save to session history
+            st.session_state.history.insert(0, {
+                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                "patient": final_result.get("patient_name", ""),
+                "meds": len(final_result.get("medications", [])),
+                "raw": final_result,
+            })
+            st.session_state.history = st.session_state.history[:20]
+
         # Delete temp folder
         remove_temp_folder(output_folder)
+
+    with tab_hist:
+        st.subheader("📜 History (this session)")
+        if not st.session_state.history:
+            st.caption("No prescriptions processed yet in this session.")
+        else:
+            if st.button("Clear history", key="clear_hist"):
+                st.session_state.history = []
+                st.rerun()
+            for i, h in enumerate(st.session_state.history):
+                with st.expander(f"{h['ts']} — {h['patient'] or 'Unknown'} ({h['meds']} meds)", expanded=(i == 0)):
+                    st.json(h["raw"])
 
 if __name__ == "__main__":
     main()
