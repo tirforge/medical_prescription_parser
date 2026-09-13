@@ -15,6 +15,12 @@ test('health is env-only, no key input in website', async ({ page, request }) =>
   await expect(page.getByRole('tab', { name: 'Prescription' })).toBeVisible({ timeout: 5000 });
   // no password input in website
   await expect(page.locator('input[type="password"]')).toHaveCount(0);
+  // photo upload + capture + paste from clipboard present
+  await expect(page.locator('#filePick')).toHaveCount(1);
+  await expect(page.locator('#camPick')).toHaveCount(1);
+  await expect(page.locator('#camBtn')).toBeVisible();
+  await expect(page.locator('#pasteBtn')).toBeVisible();
+  await expect(page.locator('#camPick')).toHaveAttribute('capture', 'environment');
 });
 
 test('api health + verify + parse (env key)', async ({ request }) => {

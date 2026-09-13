@@ -279,8 +279,13 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
                 Choose files
               </label>
               <input type="file" id="filePick" accept="image/*,.pdf" multiple aria-label="Choose prescription files" />
+              <input type="file" id="camPick" accept="image/*" capture="environment" hidden />
               <div class="row" style="justify-content: center; margin-top: 12px;">
                 <button class="btn btn-secondary" id="sampleBtn">Use sample scan</button>
+              </div>
+              <div class="row" style="justify-content: center; margin-top: 12px; gap: 12px;">
+                <button class="btn btn-secondary" id="camBtn" aria-label="Take photo with camera">📷 Take photo</button>
+                <button class="btn btn-secondary" id="pasteBtn" aria-label="Paste image from clipboard">📋 Paste from clipboard</button>
               </div>
               <div class="filechips" id="fileChips"></div>
               <div class="fileline" id="fileLine" role="status"></div>
@@ -571,6 +576,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     res.innerHTML = html;
     bindExports(rows);
   }
+  function run(fromDrop) {
     var files = fromDrop || (pick.files ? pick.files : []);
     var n = files.length;
     if (!n) { line.textContent = 'Choose at least one file to begin.'; return; }
@@ -622,6 +628,43 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     document.querySelectorAll('[data-doctor]').forEach(function (e) { e.hidden = patientView; });
   }
   pick.addEventListener('change', function () { run(); });
+  // Photo capture + clipboard paste (missing before)
+  var camPick = document.getElementById('camPick');
+  if (camPick) {
+    document.getElementById('camBtn').addEventListener('click', function () { camPick.click(); });
+    camPick.addEventListener('change', function () { if (camPick.files.length) run(camPick.files); });
+  }
+  var pasteBtn = document.getElementById('pasteBtn');
+  if (pasteBtn) {
+    pasteBtn.addEventListener('click', async function () {
+      try {
+        if (navigator.clipboard && navigator.clipboard.read) {
+          const items = await navigator.clipboard.read();
+          for (const item of items) {
+            for (const type of item.types) {
+              if (type.startsWith('image/')) {
+                const blob = await item.getType(type);
+                run([new File([blob], 'pasted-' + Date.now() + '.png', { type })]);
+                return;
+              }
+            }
+          }
+        }
+        line.textContent = 'No image in clipboard — copy an image then press Ctrl+V.';
+      } catch (e) {
+        line.textContent = 'Clipboard blocked — try Ctrl+V directly on the page.';
+      }
+    });
+  }
+  document.addEventListener('paste', function (e) {
+    const items = (e.clipboardData && e.clipboardData.items) || [];
+    for (let i = 0; i < items.length; i++) {
+      if (items[i].type.indexOf('image') === 0) {
+        const file = items[i].getAsFile();
+        if (file) { run([file]); e.preventDefault(); return; }
+      }
+    }
+  });
   document.getElementById('sampleBtn').addEventListener('click', function () {
     line.textContent = 'Loading sample scan…';
     fetch('accuracy_test/rx_00030.png').then(function (r) {
