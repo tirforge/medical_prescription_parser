@@ -460,8 +460,10 @@ def main():
                                help="Optional if keys.py or .env already has it.")
         if key_in and key_in.strip():
             os.environ["GOOGLE_API_KEY"] = key_in.strip()
+        role = st.radio("View as", ["Patient (simple)", "Doctor (detailed)"], horizontal=True, key="role_toggle")
         st.divider()
         st.caption("⚠️ Educational only — not medical advice. Free-tier APIs may retain data; real patient data belongs on a paid tier.")
+        st.caption("Mobile: tables scroll horizontally. Accessibility: high-contrast theme, 16px+ text.")
 
     if "history" not in st.session_state:
         st.session_state.history = []
@@ -659,6 +661,17 @@ def main():
                         st.subheader("Medicine Verification (Indian DB)")
                         st.dataframe(verify_df, width="stretch", hide_index=True)
                         st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
+                        # Confidence per field (blue/yellow/red pattern from Analyzer)
+                        cols = st.columns(len(checks)) if checks else []
+                        for col, c in zip(cols, checks):
+                            s = c.get("status","")
+                            if s.startswith("Verified - brand"):
+                                col.markdown(f"<div style='text-align:center;padding:6px;border-radius:8px;background:#e6f4ea;color:#137333;font-weight:600'>High ✅</div>", unsafe_allow_html=True)
+                            elif "Auto-corrected" in s or "salt" in s:
+                                col.markdown(f"<div style='text-align:center;padding:6px;border-radius:8px;background:#fef7e0;color:#8a6d00;font-weight:600'>Medium ⚠️</div>", unsafe_allow_html=True)
+                            else:
+                                col.markdown(f"<div style='text-align:center;padding:6px;border-radius:8px;background:#fce8e6;color:#a50e0e;font-weight:600'>Low ❌</div>", unsafe_allow_html=True)
+                            col.caption(c['extracted'])
 
                         # Side effects & safety: full Indian data + openFDA label info.
                         # Fast path: FDA lookups run in parallel, ONE Gemini call simplifies all.
@@ -751,10 +764,70 @@ def main():
                     render_copy_button(clipboard_text, button_text="Copy to Clipboard", key="rx_text")
                     st.code(clipboard_text, language="markdown")
 
-                    with st.expander("JSON (for copy/paste into other tools)", expanded=False):
-                        json_text = json.dumps(final_result, indent=2, default=str)
-                        render_copy_button(json_text, button_text="Copy JSON", key="rx_json")
-                        st.code(json_text, language="json")
+                    is_doctor = "Doctor" in st.session_state.get("role_toggle","")
+                    if is_doctor:
+                        with st.expander("JSON (for copy/paste into other tools)", expanded=False):
+                            json_text = json.dumps(final_result, indent=2, default=str)
+                            render_copy_button(json_text, button_text="Copy JSON", key="rx_json")
+                            st.code(json_text, language="json")
+                    else:
+                        st.caption("Doctor view shows JSON and full verification tables.")
+
+                    # Export CSV/PDF
+                    st.subheader("Export")
+                    med_csv = pd.DataFrame(final_result.get("medications", [])).to_csv(index=False)
+                    st.download_button("⬇️ Download medications CSV", med_csv, file_name=f"rx_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="dl_csv")
+                    report = clipboard_text + "\n\n---\nVerification:\n" + "\n".join(f"{c['extracted']} -> {c['match']} ({c['status']})" for c in checks)
+                    st.download_button("⬇️ Download report (TXT)", report, file_name=f"rx_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="dl_txt")
+                    try:
+                        from fpdf import FPDF
+                        pdf = FPDF()
+                        pdf.add_page()
+                        pdf.set_font("Helvetica", "B", 16)
+                        pdf.cell(0, 10, "Medical Prescription Report", ln=True, align="C")
+                        pdf.set_font("Helvetica", "", 9)
+                        for line in report.split("\n"):
+                            pdf.multi_cell(0, 5, line.encode("latin-1", "replace").decode("latin-1"))
+                        pdf_bytes = pdf.output()
+                        st.download_button("⬇️ Download clinical PDF", bytes(pdf_bytes), file_name=f"rx_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.pdf", mime="application/pdf", key="dl_pdf")
+                    except Exception as e:
+                        st.caption(f"PDF export not available: {e}")
+                    st.caption("Tip: Print this page (Ctrl+P) → Save as PDF for a formatted report.")
+
+                    # AI medication chat (grounded on parsed result)
+                    st.subheader("💬 Ask about these medicines")
+                    if "rx_chat" not in st.session_state: st.session_state.rx_chat = []
+                    for role, msg in st.session_state.rx_chat:
+                        st.chat_message(role).write(msg)
+                    q = st.chat_input("Ask e.g. 'What are side effects of Dolo 650?'")
+                    if q:
+                        st.chat_message("user").write(q)
+                        st.session_state.rx_chat.append(("user", q))
+                        try:
+                            from langchain_google_genai import ChatGoogleGenerativeAI
+                            from langchain_core.messages import HumanMessage
+                            llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+                            ctx = json.dumps(final_result, default=str)[:3000]
+                            ans = llm.invoke([HumanMessage(content=f"Context prescription JSON: {ctx}\nQuestion: {q}\nAnswer concisely, not medical advice, cite composition if relevant.")]).content
+                            if isinstance(ans, list): ans = " ".join(b.get("text","") for b in ans if isinstance(b,dict) and b.get("type")=="text")
+                            st.chat_message("assistant").write(ans)
+                            st.session_state.rx_chat.append(("assistant", ans))
+                        except Exception as e:
+                            st.error(f"Chat failed: {e}")
+
+                    # Sample-learning: save correction for future few-shot
+                    with st.expander("✏️ Save correction (improve future parses)", expanded=False):
+                        corr = st.text_area("Corrected JSON (if you fixed anything)", value=json.dumps(final_result, indent=2, default=str)[:4000], height=150, key=f"corr_{len(st.session_state.history)}")
+                        if st.button("Save correction", key=f"save_corr_{len(st.session_state.history)}"):
+                            try:
+                                import time
+                                open("learning_corrections.jsonl","a").write(json.dumps({"ts": int(time.time()), "correction": json.loads(corr)})+"\n")
+                                st.success("Saved — will be used as few-shot context next time.")
+                                # clear cache so next find_similar sees it
+                                try: from vector_store import CACHE; CACHE.clear()
+                                except: pass
+                            except Exception as e:
+                                st.error(f"Save failed: {e}")
 
                     # Save to session history
                     st.session_state.history.insert(0, {

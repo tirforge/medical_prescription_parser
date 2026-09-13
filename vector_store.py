@@ -16,9 +16,17 @@ def _load_examples():
         if p.endswith(".out.json"): continue
         try:
             j = json.load(open(p))
-            gt = j.get("ground_truth") or str(j)
+            gt = j.get("ground_truth") or j.get("groundTruth") or str(j)
             docs.append((os.path.basename(p), gt))
         except: continue
+    # learning corrections persisted to JSONL
+    lp = os.path.join(os.path.dirname(__file__), "learning_corrections.jsonl")
+    if os.path.exists(lp):
+        for line in open(lp):
+            try:
+                j = json.loads(line)
+                docs.append((f"learn_{j.get('ts','')}", json.dumps(j.get("correction", j))))
+            except: continue
     CACHE["docs"] = docs
     if HAS_SK and docs:
         vec = TfidfVectorizer(max_features=2000, stop_words="english")
