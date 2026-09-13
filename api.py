@@ -86,8 +86,8 @@ async def chat(body: dict):
     try:
         from indian_db import verify_medicine
         import re
-        # extract candidate drug tokens (3+ chars) and bigrams like "Rosidan PD"
-        toks = re.findall(r"[A-Za-z]{3,}", question)
+        # extract candidate drug tokens (allow numbers for dosage like 650) and bigrams like "Dolo 650", "Rosidan PD"
+        toks = re.findall(r"[A-Za-z0-9]{2,}", question)
         # also try bigrams
         bigrams = [" ".join(toks[i:i+2]) for i in range(len(toks)-1)]
         candidates = toks + bigrams
@@ -102,20 +102,24 @@ async def chat(body: dict):
                 if chk.get("status", "").startswith("Verified"):
                     db_ctx += f"\nDB hit for '{cand}': {chk.get('match')} | {chk.get('composition')} | {chk.get('manufacturer','')} | {chk.get('medicine_desc','')[:400]} | Side effects: {chk.get('side_effects_db','')[:400]}"
                 elif "Not found" in chk.get("status","") and len(cand) >= 4:
-                    if cand.lower() not in {"what","sideeffect","side","effect","whatis","is","of","the","and","for","with","a","an"}:
-                        db_ctx += f"\nDB: '{cand}' not in Indian registry (254k) — may be BD-local or misspelled."
+                    # skip common phrases like "what sideeffect" — only real drug-like tokens
+                    words = cand.lower().split()
+                    if any(w in {"what","sideeffect","side","effect","whatis","is","of","the","and","for","with","a","an"} for w in words):
+                        continue
+                    db_ctx += f"\nDB: '{cand}' not in Indian registry (254k) — may be BD-local or misspelled."
             except Exception:
                 pass
             if len(db_ctx) > 1500:
                 break
     except Exception:
         pass
-    # Direct not-found answer for main drug to avoid hallucination (Sato, Rosidan PD)
-    import re as _re2
-    m = _re2.search(r"DB: '([^']+)' not in Indian registry", db_ctx)
-    if m:
-        drug = m.group(1)
-        return {"answer": f"{drug} not found in Indian registry (254k brands) — may be a Bangladesh-local brand or misspelling. Please check the strip spelling, manufacturer and QR, and consult a pharmacist. Not medical advice."}
+    # Direct not-found only if no Verified hit (so Dolo 650 still gets normal answer, sato gets not-found)
+    if "DB hit for" not in db_ctx:
+        import re as _re2
+        m = _re2.search(r"DB: '([^']+)' not in Indian registry", db_ctx)
+        if m:
+            drug = m.group(1)
+            return {"answer": f"{drug} not found in Indian registry (254k brands) — may be a Bangladesh-local brand or misspelling. Please check the strip spelling, manufacturer and QR, and consult a pharmacist. Not medical advice."}
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
         from langchain_core.messages import HumanMessage
