@@ -20,3 +20,8 @@ Check_*/
 
 # Design-tool sidecars (preview metadata, not source)
 *.artifact.json
+
+# Playwright
+test-results/
+playwright-report/
+playwright/.cache/

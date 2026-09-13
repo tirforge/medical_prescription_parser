@@ -1,0 +1,27 @@
+{
+  "name": "medical_prescription_parser",
+  "version": "1.0.0",
+  "description": "Upload a handwritten prescription photo → structured data (patient, doctor, medicines) + Indian registry verification + side effects + interaction screen. Built with Streamlit and free-tier vision models (Gemini / Gemma 4).",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/tirforge/medical_prescription_parser.git"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/tirforge/medical_prescription_parser/issues"
+  },
+  "homepage": "https://github.com/tirforge/medical_prescription_parser#readme",
+  "devDependencies": {
+    "@playwright/test": "^1.63.0"
+  }
+}

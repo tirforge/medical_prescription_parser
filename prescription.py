@@ -576,10 +576,7 @@ def main():
             default_idx = 0
         GEMINI_MODEL = st.selectbox("Vision model", MODEL_CHOICES, index=default_idx,
                                     help="Gemma 4 = huge free quota. Lite = fastest.")
-        key_in = st.text_input("Google API key", type="password",
-                               help="Optional if keys.py or .env already has it.")
-        if key_in and key_in.strip():
-            os.environ["GOOGLE_API_KEY"] = key_in.strip()
+        # API key is env-only (GOOGLE_API_KEY) — no input box per migration
         role = st.radio("View as", ["Patient (simple)", "Doctor (detailed)"], horizontal=True, key="role_toggle")
         lang = st.radio("Language / ভাষা", ["English", "বাংলা"], horizontal=True, key="lang_toggle")
         big = st.toggle("A+ Big text (elderly mode)", value=False, key="big_text",
