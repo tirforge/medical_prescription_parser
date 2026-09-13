@@ -82,7 +82,7 @@ def _fda_search(term: str):
                     for hit in results:
                         if _hit_matches(hit, term):
                             return hit
-                    return None  # matches exist but for other drugs — don't mislead
+                    continue  # no good hit for this field — try next field
             except requests.RequestException:
                 return {"_connection_error": True}
     return None

@@ -248,13 +248,39 @@ def sweep_stale_outputs(max_age_hours: int = 2):
     """Delete leftover Check_* folders from crashed/quota-killed runs.
     The success path already cleans up; this catches everything else."""
     import time
+    from pathlib import Path
     now = time.time()
-    for d in glob.glob("Check_*"):
+    base = Path(__file__).parent
+    for d in base.glob("Check_*"):
         try:
-            if os.path.isdir(d) and (now - os.path.getmtime(d)) > max_age_hours * 3600:
-                shutil.rmtree(d, ignore_errors=True)
+            if d.is_dir() and (now - d.stat().st_mtime) > max_age_hours * 3600:
+                shutil.rmtree(str(d), ignore_errors=True)
         except OSError:
             pass
+
+
+def normalize_frequency(freq: str) -> str:
+    """Normalize Indian Rx shorthand: OD/BD/TDS/QID/SOS and 1-0-1 schedules."""
+    if not freq:
+        return freq
+    m = str(freq).strip()
+    upper = m.upper().replace(".", "").strip()
+    table = {
+        "OD": "Once a day", "QD": "Once a day", "1-0-0": "Once a day (morning)",
+        "BD": "Twice a day", "BID": "Twice a day", "1-0-1": "Twice a day", "1+0+1": "Twice a day",
+        "TDS": "Three times a day", "TID": "Three times a day", "1-1-1": "Three times a day",
+        "QID": "Four times a day", "1-1-1-1": "Four times a day",
+        "SOS": "As needed (SOS)", "HS": "At bedtime", "0-0-1": "Once at night",
+        "0-1-0": "Once at noon", "1-0-0-1": "Twice a day (morning+night)",
+    }
+    # 1-0-1 style already in table; otherwise keep original with expanded hint
+    if upper in table:
+        return table[upper]
+    # e.g. "1+0+1" with spaces
+    compact = upper.replace(" ", "").replace("+", "-")
+    if compact in table:
+        return table[compact]
+    return m
 
 
 def dedupe_medications(meds: list) -> list:
@@ -265,11 +291,12 @@ def dedupe_medications(meds: list) -> list:
         key = (
             str(m.get("name") or "").strip().lower(),
             str(m.get("dosage") or "").strip().lower(),
-            str(m.get("frequency") or "").strip().lower(),
+            normalize_frequency(str(m.get("frequency") or "")).strip().lower(),
         )
         dur = str(m.get("duration") or "").strip()
         if key not in seen:
             seen[key] = dict(m)
+            seen[key]["frequency"] = normalize_frequency(m.get("frequency", ""))
         else:
             # keep longest informative duration
             cur = str(seen[key].get("duration") or "").strip()
@@ -569,7 +596,7 @@ def main():
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
             first = inputs[0][0].split(".")[0].replace(" ", "_")
             suffix = f"{first}_x{len(inputs)}" if len(inputs) > 1 else first
-            output_folder = os.path.join(".", f"Check_{suffix}_{timestamp}")
+            output_folder = str((__import__("pathlib").Path(__file__).parent / f"Check_{suffix}_{timestamp}").resolve())
             os.makedirs(output_folder, exist_ok=True)
             try:
 
@@ -644,7 +671,7 @@ def main():
                     if 'medications' in final_result and final_result['medications']:
                         medications_df = pd.DataFrame(final_result['medications'])
                         st.subheader("Medications")
-                        st.dataframe(medications_df, width="stretch", hide_index=True)
+                        st.dataframe(medications_df.astype(str), width="stretch", hide_index=True)
 
                         # Online verification against the Indian medicine database (offline, ~254k brands)
                         with st.spinner('Verifying medicines (Indian DB)...'):
@@ -659,7 +686,7 @@ def main():
                             'Status': c['status'],
                         } for c in checks])
                         st.subheader("Medicine Verification (Indian DB)")
-                        st.dataframe(verify_df, width="stretch", hide_index=True)
+                        st.dataframe(verify_df.astype(str), width="stretch", hide_index=True)
                         st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
                         # Confidence per field (blue/yellow/red pattern from Analyzer)
                         cols = st.columns(len(checks)) if checks else []
