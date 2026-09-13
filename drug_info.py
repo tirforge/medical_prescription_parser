@@ -37,7 +37,10 @@ def _hit_matches(hit: dict, token: str) -> bool:
         names.extend(v if isinstance(v, list) else [v])
     blob = " ".join(str(n) for n in names).lower()
     candidates = {token.lower(), INN_TO_USAN.get(token.lower(), "")}
-    return any(c and c in blob for c in candidates)
+    for c in candidates:
+        if c and re.search(r"\b" + re.escape(c) + r"\b", blob):
+            return True
+    return False
 
 
 def _clean_fda_text(value, limit: int = 1200) -> str:

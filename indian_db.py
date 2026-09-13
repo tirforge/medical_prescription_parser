@@ -24,9 +24,10 @@ def _clean(name: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def _load_db():
-    """Returns (brands, salts): brands maps base-name -> [(full, comp, mfr, active, price, pack, mtype, desc, se, di, salt)], salts maps salt -> [count, example]."""
+    """Returns (brands, salts, bucket): brands maps base-name -> [entries], salts -> [count, example], bucket -> initial -> [keys]."""
     brands: dict = {}
     salts: dict = {}
+    bucket: dict = {}
     with open(DB_PATH, newline="", encoding="utf-8", errors="replace") as f:
         for row in csv.DictReader(f):
             full = (row.get("name") or "").strip()
@@ -51,11 +52,13 @@ def _load_db():
             salt_comp = (row.get("salt_composition") or "").strip()
             active = (row.get("Is_discontinued") or "").strip().upper() != "TRUE"
             brands.setdefault(base, []).append((full, comp, mfr, active, price, pack, mtype, desc, se, di, salt_comp))
+            if base:
+                bucket.setdefault(base[0], []).append(base)
             for tok in set(re.split(r"[^a-z]+", comp.lower())):
-                if len(tok) >= 5:
+                if len(tok) >= 4:
                     entry = salts.setdefault(tok, [0, full])
                     entry[0] += 1
-    return brands, salts
+    return brands, salts, bucket
 
 
 def _best_entry(entries):
@@ -89,7 +92,7 @@ def _verify_local(name: str) -> dict:
               "side_effects_db": "", "drug_interactions_db": "", "salt_composition": "",
               "salt_count": 0, "salt_example": "", "status": "Not checked"}
     try:
-        brands, salts = _load_db()
+        brands, salts, bucket_map = _load_db()
     except FileNotFoundError:
         result["status"] = "DB missing (indian_medicine_db.csv)"
         return result
@@ -115,8 +118,8 @@ def _verify_local(name: str) -> dict:
                           composition=tok, status="Verified - salt in Indian DB")
             return result
 
-    # 3. Fuzzy brand suggestion (same first letter bucket for speed)
-    bucket = [k for k in brands if k[:1] == clean[:1]] or list(brands)
+    # 3. Fuzzy brand suggestion (bucket by initial for speed)
+    bucket = bucket_map.get(clean[:1], []) or list(brands.keys())
     suggestions = difflib.get_close_matches(clean, bucket, n=3, cutoff=0.72)
     if suggestions:
         # Auto-correct: fuzzy is better than AI's misspelling — treat as verified
@@ -138,7 +141,7 @@ def find_alternatives(composition: str, exclude: str = "", n: int = 3) -> list:
     if not toks: return []
     key = toks[0]
     try:
-        brands, _ = _load_db()
+        brands, _, _ = _load_db()
     except: return []
     alts = []
     for base, entries in brands.items():

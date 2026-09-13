@@ -634,15 +634,15 @@ def main():
                     final_result = get_prescription_informations(model_paths)
                     final_result["medications"] = dedupe_medications(final_result.get("medications"))
                     st_status.write("✅ Reading done — verifying medicines...")           
-                    # Process and display results
-                    if 'additional_notes' in final_result:
-                        additional_notes = final_result['additional_notes']
-                        # Format additional notes as bullet points
-                        if isinstance(additional_notes, list):
-                            formatted_notes = "<br> ".join(additional_notes)
-                        else:
-                            formatted_notes = additional_notes.replace("\n", "<br> ")
-                        final_result['additional_notes'] = f"<ul><li>{formatted_notes}</li></ul>"
+                    # Keep final_result plain for JSON/history; render HTML only for display
+                    _notes_raw = final_result.get('additional_notes', '')
+                    if isinstance(_notes_raw, list):
+                        _notes_html = "<ul>" + "".join(f"<li>{str(x).strip()}</li>" for x in _notes_raw if str(x).strip()) + "</ul>"
+                    elif isinstance(_notes_raw, str) and _notes_raw.strip():
+                        parts = [p.strip() for p in _notes_raw.replace("\r", "").split("\n") if p.strip()]
+                        _notes_html = "<ul>" + "".join(f"<li>{p}</li>" for p in parts) + "</ul>" if len(parts) > 1 else f"<p>{_notes_raw.strip()}</p>"
+                    else:
+                        _notes_html = ""
 
                     # # Convert final_result to a list of tuples for DataFrame creation
                     # data = [(key, final_result[key]) for key in final_result if key != 'medications']
@@ -658,9 +658,14 @@ def main():
                     #     st.table(medications_df)
 
 
-                    # Convert final_result to a list of tuples for display
-                    data = [(key, _strip_html(str(final_result[key])) if key == "additional_notes" else str(final_result[key]))
-                            for key in final_result if key != 'medications']
+                    # Convert final_result to a list of tuples for display (Value as string)
+                    def _fmt(v):
+                        if isinstance(v, (datetime, date)):
+                            return v.isoformat()
+                        if isinstance(v, list):
+                            return ", ".join(str(x) for x in v)
+                        return str(v) if v is not None else ""
+                    data = [(key, _fmt(final_result[key])) for key in final_result if key != 'medications']
                     df = pd.DataFrame(data, columns=["Field", "Value"])
 
                     # Theme-aware tables (readable in light + dark mode) — Value as string to avoid Arrow type error
