@@ -1,76 +1,131 @@
-/* Hero — medical trust, large but not shouty */
-.hero {
-    text-align: center;
-    padding: 16px 0 8px;
+/* RxCare — unified teal theme (accent #0C6B64 everywhere; config.toml matches).
+   Tokens: bg #F4F7F6 · surface #fff · fg #10201E · muted #5B7282 · border #DFE8E5 */
+@keyframes fadeUp { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: none; } }
+@keyframes shimmer { 0% { background-position: -400px 0; } 100% { background-position: 400px 0; } }
+@keyframes pulseSoft { 0%,100% { opacity: 1; } 50% { opacity: .55; } }
+@keyframes barSlide { from { width: 0; } to { width: 100%; } }
+
+/* Home hero (ink card, teal accents only) */
+.rx-home {
+  background: #0b1514; color: #f2f5f4;
+  border-radius: 20px; padding: 26px 28px; margin: 6px 0 18px;
+  border: 1px solid #1d2f2b;
+  animation: fadeUp .5s ease both;
 }
-.hero h1 {
-    font-size: 2.2rem;
-    font-weight: 800;
-    letter-spacing: -0.02em;
-    margin: 0;
-    color: #0E4A6B;
+.rx-home h1 { font-size: 1.65rem; line-height: 1.2; letter-spacing: -.015em; margin: 0; color: #fff; }
+.rx-home p { color: #b9c9c3; font-size: 1rem; margin: 10px 0 0; max-width: 72ch; }
+.rx-home p b { color: #fff; }
+.home-steps { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; margin-top: 16px; }
+.home-steps span { background: #111f1c; border: 1px solid #22332e; border-radius: 12px; padding: 10px 12px; font-size: .83rem; color: #9db5ad; display: block; }
+.home-steps b { display: block; color: #e8f3f0; font-size: .86rem; }
+@media (max-width: 720px) { .home-steps { grid-template-columns: 1fr; } }
+
+/* Section head + pill (single accent) */
+.rx-section-head h2 { margin: 2px 0 0; }
+.pill {
+  display: inline-block; padding: 3px 12px; border-radius: 999px;
+  background: rgba(12,107,100,.12); color: #0c6b64;
+  font-family: ui-monospace, Menlo, monospace; font-size: 11px;
+  letter-spacing: .05em; text-transform: uppercase; font-weight: 700;
 }
-.hero p {
-    color: #5b7282;
-    margin: 6px 0 0;
-    font-size: 1.05rem;
+
+/* Cards animate in */
+.med-card, .empty-state, .risk-banner { animation: fadeUp .45s ease both; }
+.med-card {
+  background: #fff; border: 1px solid #e0e8e6; border-radius: 16px;
+  padding: 14px 16px; margin: 10px 0;
+  box-shadow: 0 4px 18px rgba(11,21,20,.06);
+  transition: transform .15s ease, box-shadow .15s ease;
 }
-/* Card shadow (microsoft Streamlit_UI_Template pattern) */
-.card {
-    background: #fff;
-    border: 1px solid #e5e8eb;
-    border-radius: 12px;
-    padding: 16px 18px;
-    box-shadow: 0 2px 10px rgba(16, 35, 31, 0.06);
+.med-card:hover { transform: translateY(-1px); box-shadow: 0 8px 26px rgba(11,21,20,.10); }
+.med-head { display: flex; justify-content: space-between; gap: 10px; align-items: flex-start; flex-wrap: wrap; }
+.med-head .meta { color: #5f6f7a; font-weight: 400; }
+.badge { font-family: ui-monospace, Menlo, monospace; font-size: 11px; padding: 4px 10px; border-radius: 999px; font-weight: 700; white-space: nowrap; }
+.b-ok { background: #e6f4ea; color: #137333; }
+.b-mid { background: #fef7e0; color: #8a6d00; }
+.b-low { background: #fce8e6; color: #a50e0e; }
+
+/* Confidence pills (theme-aware, replaces inline hardcoded colors) */
+.conf-h, .conf-m, .conf-l {
+  display: block; text-align: center; padding: 6px; border-radius: 8px; font-weight: 600;
 }
+.conf-h { background: #e6f4ea; color: #137333; }
+.conf-m { background: #fef7e0; color: #8a6d00; }
+.conf-l { background: #fce8e6; color: #a50e0e; }
+
+/* Risk banner */
+.risk-banner { border-radius: 12px; padding: 12px 14px; margin: 12px 0; font-size: .92rem; border: 1px solid; }
+.risk-low { background: #e7f4ef; border-color: #bfe0d2; color: #0d4a3a; }
+.risk-mod { background: #fdf3e3; border-color: #ecd3a3; color: #5f420e; }
+.risk-high { background: #fbe7e3; border-color: #f0b9b2; color: #7a1f18; }
+
+/* Empty state */
+.empty-state {
+  border: 1.5px dashed #cfddd9; border-radius: 14px; padding: 20px;
+  text-align: center; color: #5f6f7a; background: #f6faf9; margin: 10px 0;
+}
+
+/* Loading: skeleton shimmer + animated progress + status pulse */
+.rx-skeleton {
+  border-radius: 12px; height: 64px; margin: 10px 0;
+  background: linear-gradient(90deg, #eef3f1 25%, #dfe9e6 37%, #eef3f1 63%);
+  background-size: 800px 100%; animation: shimmer 1.4s linear infinite;
+}
+div[data-testid="stSpinner"] { animation: pulseSoft 1.2s ease infinite; }
+div[data-testid="stProgress"] > div > div { animation: barSlide .6s ease both; }
+div[data-testid="stStatusWidget"] { animation: fadeUp .4s ease both; }
+
+/* Buttons: pill, animated, teal primary */
+div[data-testid="stButton"] > button, div[data-testid="stDownloadButton"] > button {
+  border-radius: 999px !important; min-height: 44px;
+  font-weight: 650; transition: transform .06s ease, box-shadow .15s ease, background .15s ease !important;
+}
+div[data-testid="stButton"] > button:active { transform: translateY(1px); }
+div[data-testid="stButton"] > button[kind="primary"] { box-shadow: 0 6px 18px rgba(12,107,100,.28); }
+div[data-testid="stButton"] > button[kind="primary"]:hover { box-shadow: 0 8px 24px rgba(12,107,100,.36); }
+
+/* Tabs + expanders */
+[data-testid="stTabs"] button[aria-selected="true"] { font-weight: 700; }
+div[data-testid="stExpander"] { border-radius: 12px !important; }
+div[data-testid="stExpander"] div[role="button"] p { font-size: 1rem; font-weight: bold; }
+
+/* Metrics pop */
+div[data-testid="stMetric"] { animation: fadeUp .45s ease both; }
+
+/* Focus visibility */
+a:focus-visible, button:focus-visible, input:focus-visible, summary:focus-visible, [tabindex]:focus-visible {
+  outline: 3px solid rgba(12,107,100,.45) !important; outline-offset: 2px; border-radius: 6px;
+}
+
+/* Big-text elderly mode (applied via .big-text on body wrapper) */
+.big-text, .big-text p, .big-text li, .big-text td { font-size: 18px !important; line-height: 1.65 !important; }
+
+/* Theme-aware tables (no hardcoded blue/gray) */
+.custom-table { width: 100%; border-collapse: collapse; margin: 20px 0; background: var(--background-color, #fff); }
+.custom-table th, .custom-table td { border: 1px solid #cfddd9; padding: 8px; text-align: left; }
+.custom-table th { background: rgba(12,107,100,.10); font-weight: bold; }
+.expander-image { max-width: 50%; height: auto; display: block; margin-inline: auto; }
+
+/* Dark mode: every custom surface covered */
 @media (prefers-color-scheme: dark) {
-    .hero h1 { color: #E8F3F0; }
-    .hero p { color: #a8b8c2; }
-    .card { background: #16211E; border-color: #2a3a36; color: #E8F3F0; }
-    .custom-table, .custom-table th, .custom-table td { background: #16211E; color: #E8F3F0; border-color: #2a3a36; }
-    .custom-table th { background: #1e2e2b; }
-}
-[data-testid="stTabs"] button[aria-selected="true"] {
-    font-weight: 700;
-}
-div[data-testid="stExpander"] div[role="button"] p {
-    font-size: 1rem;
-    font-weight: bold;
-}
-
-
-.custom-table {
-    width: 100%;
-    border-collapse: collapse;
-    margin: 20px 0;
-    background: #ffffff;
-    color: #111111;
+  .med-card { background: #16211E; border-color: #2a3a36; color: #E8F3F0; box-shadow: none; }
+  .med-head .meta { color: #a8b8c2; }
+  .empty-state { background: #16211E; border-color: #2a3a36; color: #a8b8c2; }
+  .pill { background: rgba(62,193,190,.16); color: #3EC1BE; }
+  .conf-h { background: #12352b; color: #7fd1a8; }
+  .conf-m { background: #3a2f10; color: #e8c35a; }
+  .conf-l { background: #3d1a16; color: #f0968a; }
+  .risk-low { background: #12352b; border-color: #1f5c48; color: #a9e2c6; }
+  .risk-mod { background: #3a2f10; border-color: #6b5518; color: #f0d48a; }
+  .risk-high { background: #3d1a16; border-color: #7a2d25; color: #f5b3ab; }
+  .rx-skeleton { background: linear-gradient(90deg, #16211E 25%, #22332e 37%, #16211E 63%); background-size: 800px 100%; }
+  .custom-table th, .custom-table td { border-color: #2a3a36; }
+  .custom-table th { background: #1e2e2b; }
 }
 
-.custom-table th, .custom-table td {
-    border: 1px solid #888888;
-    padding: 8px;
-    text-align: left;
-    color: #111111;
-    background: #ffffff;
-}
-
-.custom-table th {
-    background-color: #dbe7f3;
-    font-weight: bold;
-    color: #111111;
-}
-
-.stTable {
-    width: 100%;
-    overflow-x: auto;
-}
-
-
-.expander-image {
-    max-width: 50%; /* Adjust the percentage as needed */
-    height: auto;
-    display: block;
-    margin-left: auto;
-    margin-right: auto;
+/* Print: clean clinical report */
+@media print {
+  .rx-home, header, [data-testid="stSidebar"], [data-testid="stTabs"] { display: none !important; }
+  .med-card, .risk-banner { break-inside: avoid; box-shadow: none !important; }
+  body { background: #fff !important; }
 }

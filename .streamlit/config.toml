@@ -1,8 +1,7 @@
-# Medical theme: clinical blue-gray — most trusted for healthcare (awesome-streamlit-themes: Healthcare)
-# + IBM Plex-style radius, widget borders; teal fallback in dark mode.
+# Medical theme: deep teal — single accent across config + CSS (was blue #0066CC, now unified).
 [theme]
 base = "light"
-primaryColor = "#0066CC"
+primaryColor = "#0C6B64"
 font = "sans serif"
 showWidgetBorder = true
 

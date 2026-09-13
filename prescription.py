@@ -38,9 +38,102 @@ try:
 except ImportError:
     paste_image_button = None
     HAS_PASTE = False
-from indian_db import verify_medicine as check_medicine_online
+from indian_db import verify_medicine as check_medicine_online, find_alternatives
 from drug_info import get_drug_safety, simplify_all_for_patient, check_interactions
 from rxnorm import rxnorm_lookup, score_genuineness
+
+# --- RxCare wire-up: Bengali/English labels (Phase 2 i18n) ---
+LABELS = {
+    "en": {
+        "upload": "Upload Prescription image(s) — multi-page supported",
+        "scan_btn": "🔍 Scan Medicine", "read_btn": "Read prescription",
+        "sample": "Use sample rx_00030.png", "history": "📜 History (this session)",
+        "safety": "Side Effects & Safety", "combo": "Combination Check (drug interactions)",
+        "copy": "Copy Results", "export": "Export", "chat": "💬 Ask about these medicines",
+    },
+    "bn": {
+        "upload": "প্রেসক্রিপশনের ছবি আপলোড করুন — একাধিক পেজ সমর্থিত",
+        "scan_btn": "🔍 ওষুধ স্ক্যান করুন", "read_btn": "প্রেসক্রিপশন পড়ুন",
+        "sample": "নমুনা rx_00030.png ব্যবহার করুন", "history": "📜 ইতিহাস (এই সেশন)",
+        "safety": "পার্শ্বপ্রতিক্রিয়া ও নিরাপত্তা", "combo": "সংমিশ্রণ পরীক্ষা",
+        "copy": "ফলাফল কপি করুন", "export": "এক্সপোর্ট", "chat": "💬 এই ওষুধগুলো সম্পর্কে জিজ্ঞাসা করুন",
+    },
+}
+
+def blur_score(path: str) -> float:
+    """Laplacian-variance sharpness (no cv2 dep). <~60 = likely blurry phone photo."""
+    try:
+        import numpy as np
+        img = Image.open(path).convert("L").resize((400, 400))
+        a = np.asarray(img, dtype=float)
+        lap = (a[2:, 1:-1] + a[:-2, 1:-1] + a[1:-1, 2:] + a[1:-1, :-2] - 4 * a[1:-1, 1:-1])
+        return float(lap.var())
+    except Exception:
+        return 9999.0
+
+def pdf_to_images(pdf_bytes: bytes, out_dir: str) -> list:
+    """Scanned-PDF support: render pages via PyMuPDF (comes with preocr) or pypdfium."""
+    try:
+        import fitz  # PyMuPDF
+        doc = fitz.open(stream=pdf_bytes, filetype="pdf")
+        paths = []
+        for i, page in enumerate(doc):
+            pix = page.get_pixmap(dpi=150)
+            p = os.path.join(out_dir, f"pdf_page{i+1}.png")
+            pix.save(p)
+            paths.append(p)
+        return paths
+    except Exception:
+        pass
+    try:
+        import pypdfium2 as pdfium
+        pdf = pdfium.PdfDocument(pdf_bytes)
+        paths = []
+        for i in range(len(pdf)):
+            bmp = pdf[i].render(scale=2).to_pil()
+            p = os.path.join(out_dir, f"pdf_page{i+1}.png")
+            bmp.save(p)
+            paths.append(p)
+        return paths
+    except Exception as e:
+        raise RuntimeError(f"PDF render needs PyMuPDF/pypdfium2: {e}")
+
+def risk_score(checks: list, flags: list, meds: list) -> tuple:
+    """MedSafe-style 0-100 risk: unknown brands +30, flags +10, polypharmacy +5/med over 4."""
+    s = 0
+    for c in checks or []:
+        if c.get("status", "").startswith("Not found"):
+            s += 30
+        elif "auto-corrected" in c.get("status", "").lower() or "salt" in c.get("status", "").lower():
+            s += 10
+    s += 10 * len(flags or [])
+    if len(meds or []) > 4:
+        s += 5 * (len(meds) - 4)
+    s = max(0, min(100, s))
+    band = "LOW" if s < 25 else ("MODERATE" if s < 55 else ("HIGH" if s < 80 else "CRITICAL"))
+    return s, band
+
+def age_dosage_flags(result: dict) -> list:
+    """Age-specific dosage heuristic (DrugScan gap): child/elderly adult-dose warning."""
+    out = []
+    try:
+        age = int(str(result.get("patient_age", "") or "0").split()[0][:3])
+    except (ValueError, TypeError):
+        return out
+    if not age:
+        return out
+    for m in result.get("medications") or []:
+        nm, dose = (m.get("name") or ""), (m.get("dosage") or "")
+        mg = "".join(ch for ch in dose if ch.isdigit() or ch == ".")
+        try:
+            mgv = float(mg) if mg else 0
+        except ValueError:
+            mgv = 0
+        if age <= 12 and mgv >= 500 and any(k in nm.lower() for k in ("paracetamol", "dolo", "augmentin", "amoxicillin")):
+            out.append(f"'{nm}' {dose}: adult-strength dose for age {age} — confirm paediatric dose with doctor.")
+        if age >= 65 and any(k in (dose + nm).lower() for k in ("sos", "qid", "4 times")):
+            out.append(f"'{nm}': frequent dosing at age {age} — confirm kidney/liver review with pharmacist.")
+    return out
 
 
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY or os.environ.get("GOOGLE_API_KEY", "")
@@ -470,7 +563,7 @@ def enhance_with_preocr(src_path: str, dst_path: str, mode: str = "quality") -> 
 
 
 def main():
-    st.markdown('<div class="hero"><h1>🏥 Medical Prescription Parsing</h1><p>Scan a strip, or upload a prescription — verified against 254k Indian brands + world registry.</p></div>', unsafe_allow_html=True)
+    st.markdown('<div class="hero rx-home"><h1>◉ RxCare — your prescription, explained like a good pharmacist would.</h1><p>Snap the handwritten paper. We read it with Gemini / Gemma vision, verify every line against <b>254,000 Indian brands (offline)</b> + NIH RxNorm + openFDA labels, and explain side effects &amp; interactions in plain words — with proof for your doctor.</p><div class="home-steps"><span><b>1 · Upload the paper</b> multi-page, paste, or one-click sample</span><span><b>2 · Each line gets proven</b> exact / corrected / salt + confidence</span><span><b>3 · Leave with clarity</b> effects, warnings, copy / CSV / PDF, Q&amp;A</span></div></div>', unsafe_allow_html=True)
     sweep_stale_outputs()
     global parser, GEMINI_MODEL
     parser = JsonOutputParser(pydantic_object=PrescriptionInformations)
@@ -488,20 +581,29 @@ def main():
         if key_in and key_in.strip():
             os.environ["GOOGLE_API_KEY"] = key_in.strip()
         role = st.radio("View as", ["Patient (simple)", "Doctor (detailed)"], horizontal=True, key="role_toggle")
+        lang = st.radio("Language / ভাষা", ["English", "বাংলা"], horizontal=True, key="lang_toggle")
+        big = st.toggle("A+ Big text (elderly mode)", value=False, key="big_text",
+                        help="RxLens-style: enlarges body text for low-vision readers.")
         st.divider()
         st.caption("⚠️ Educational only — not medical advice. Free-tier APIs may retain data; real patient data belongs on a paid tier.")
-        st.caption("Mobile: tables scroll horizontally. Accessibility: high-contrast theme, 16px+ text.")
+        st.caption("Mobile: tables scroll horizontally. Accessibility: high-contrast theme, 16px+ text, visible focus rings.")
+    L = LABELS["bn" if "বাংলা" in st.session_state.get("lang_toggle", "English") else "en"]
+    if st.session_state.get("big_text"):
+        st.markdown('<style>.stApp { font-size: 18px; } .stApp p, .stApp li, .stApp td { font-size: 18px !important; line-height: 1.65 !important; }</style>', unsafe_allow_html=True)
 
     if "history" not in st.session_state:
         st.session_state.history = []
-    tab_scan, tab_rx, tab_hist = st.tabs(["🔍 Scan Medicine", "📄 Prescription", "📜 History"])
+    if "confirm_clear" not in st.session_state:
+        st.session_state.confirm_clear = False
+    # Prescription-first order (approved home flow)
+    tab_rx, tab_scan, tab_hist = st.tabs(["📄 Prescription", "🔍 Scan Medicine", "📜 History"])
     with tab_scan:
         with st.expander("🔍 Scan a Medicine — genuine check + full data", expanded=False):
             st.caption("Type a name or snap the strip. Checks Indian registry + world registry (RxNorm) + side effects.")
             st.warning("Registry checks catch wrong spellings and fictitious makers, but only the manufacturer's QR on YOUR pack proves genuineness.")
             scan_name = st.text_input("Medicine name", placeholder="e.g. Dolo 650", key="scan_name")
             scan_photo = st.file_uploader("Or photo of the strip/box", type=["png", "jpg", "jpeg"], key="scan_photo")
-            if st.button("🔍 Scan Medicine", key="scan_go"):
+            if st.button(L["scan_btn"], key="scan_go"):
                 name = (scan_name or "").strip()
                 if scan_photo is not None and not name:
                     with st.spinner("Reading strip..."):
@@ -559,11 +661,30 @@ def main():
                     )
 
     with tab_rx:
-        uploaded_files = st.file_uploader(
-            "Upload Prescription image(s) — multi-page supported",
-            type=["png", "jpg", "jpeg"],
-            accept_multiple_files=True,
-        )
+        st.markdown('<div class="rx-section-head"><span class="pill">Prescription first · multi-page</span><h2>Start with the paper.</h2></div>', unsafe_allow_html=True)
+        c_up, c_sample = st.columns([3, 1])
+        with c_up:
+            uploaded_files = st.file_uploader(
+                L["upload"],
+                type=["png", "jpg", "jpeg", "pdf"],
+                accept_multiple_files=True,
+            )
+        with c_sample:
+            st.write("")
+            st.write("")
+            if st.button("🧪 Try a sample", key="sample_rx", help="Load accuracy_test/rx_00030.png instantly"):
+                from pathlib import Path as _P
+                _s = _P(__file__).parent / "accuracy_test" / "rx_00030.png"
+                if _s.exists():
+                    st.session_state["_sample_bytes"] = _s.read_bytes()
+                    st.session_state["_sample_name"] = "rx_00030.png"
+                    st.rerun()
+                else:
+                    st.warning("Sample not found.")
+        # Friendly empty state: show before first upload
+        _has_sample = "_sample_bytes" in st.session_state
+        if not (uploaded_files or _has_sample):
+            st.markdown('<div class="empty-state"><b>No prescription yet.</b> Drop a photo above, paste from clipboard, or hit <b>Try a sample</b> — results appear here with verification cards.</div>', unsafe_allow_html=True)
         pasted_image = None
         with st.expander("📋 Or paste an image from clipboard", expanded=False):
             if HAS_PASTE:
@@ -586,6 +707,8 @@ def main():
         inputs: list = []  # [(filename, bytes)]
         for f in uploaded_files or []:
             inputs.append((f.name, f.getvalue()))
+        if _has_sample:
+            inputs.append((st.session_state.get("_sample_name", "rx_00030.png"), st.session_state["_sample_bytes"]))
         if pasted_image is not None:
             import io as _io
             buf = _io.BytesIO()
@@ -605,7 +728,23 @@ def main():
                     p = os.path.join(output_folder, name)
                     with open(p, "wb") as f:
                         f.write(data)
-                    saved_paths.append(p)
+                    if name.lower().endswith(".pdf"):
+                        try:
+                            saved_paths.extend(pdf_to_images(data, output_folder))
+                            st.caption(f"{name}: PDF expanded to pages.")
+                        except Exception as e:
+                            st.error(f"Could not read PDF {name}: {e}")
+                    else:
+                        saved_paths.append(p)
+
+                # Blur check before paid/quota calls (error prevention)
+                for p in saved_paths:
+                    try:
+                        bs = blur_score(p)
+                        if bs < 60:
+                            st.warning(f"⚠️ {os.path.basename(p)} looks blurry (sharpness {bs:.0f}). Retake closer in good light for a better read.")
+                    except Exception:
+                        pass
 
                 if enhance and HAS_PREOCR:
                     model_paths: list = []
@@ -630,9 +769,12 @@ def main():
                             c2.image(enh, caption="Enhanced (denoise+deskew)", width="stretch")
 
                 with st.status("Processing prescription...", expanded=True) as st_status:
+                    prog = st.progress(8, text="Reading handwriting…")
+                    st.markdown('<div class="rx-skeleton"></div>', unsafe_allow_html=True)
                     st_status.write("🔍 Reading handwriting with vision model...")
                     final_result = get_prescription_informations(model_paths)
                     final_result["medications"] = dedupe_medications(final_result.get("medications"))
+                    prog.progress(48, text="Verifying against 254k brands + RxNorm…")
                     st_status.write("✅ Reading done — verifying medicines...")           
                     # Keep final_result plain for JSON/history; render HTML only for display
                     _notes_raw = final_result.get('additional_notes', '')
@@ -698,16 +840,16 @@ def main():
                         for col, c in zip(cols, checks):
                             s = c.get("status","")
                             if s.startswith("Verified - brand"):
-                                col.markdown(f"<div style='text-align:center;padding:6px;border-radius:8px;background:#e6f4ea;color:#137333;font-weight:600'>High ✅</div>", unsafe_allow_html=True)
+                                col.markdown("<div class='conf-h'>High ✅</div>", unsafe_allow_html=True)
                             elif "Auto-corrected" in s or "salt" in s:
-                                col.markdown(f"<div style='text-align:center;padding:6px;border-radius:8px;background:#fef7e0;color:#8a6d00;font-weight:600'>Medium ⚠️</div>", unsafe_allow_html=True)
+                                col.markdown("<div class='conf-m'>Medium ⚠️</div>", unsafe_allow_html=True)
                             else:
-                                col.markdown(f"<div style='text-align:center;padding:6px;border-radius:8px;background:#fce8e6;color:#a50e0e;font-weight:600'>Low ❌</div>", unsafe_allow_html=True)
+                                col.markdown("<div class='conf-l'>Low ❌</div>", unsafe_allow_html=True)
                             col.caption(c['extracted'])
 
                         # Side effects & safety: full Indian data + openFDA label info.
                         # Fast path: FDA lookups run in parallel, ONE Gemini call simplifies all.
-                        st.subheader("Side Effects & Safety (Indian data + openFDA)")
+                        st.subheader(L["safety"] + " (Indian data + openFDA)")
                         st.warning("⚠️ Educational only — not medical advice. Always verify with a doctor or pharmacist.")
                         with st.spinner("Looking up side effects..."):
                             from concurrent.futures import ThreadPoolExecutor
@@ -760,7 +902,7 @@ def main():
 
                     # Combination screening: one batched call over all medicines.
                     if len(final_result.get("medications", [])) >= 2:
-                        st.subheader("Combination Check (drug interactions)")
+                        st.subheader(L["combo"])
                         with st.spinner("Screening combinations..."):
                             inter = check_interactions([
                                 (m.get("name", ""), c.get("composition", ""))
@@ -775,23 +917,42 @@ def main():
 
                     # Human-review flags: never silently fix, always surface
                     review_flags = build_review_flags(final_result, checks)
+                    review_flags += age_dosage_flags(final_result)
                     for flag in review_flags:
                         st.warning(f"Please review: {flag}")
                     if not review_flags:
                         st.success("All sanity checks passed - no review flags.")
                     st_status.update(label="Prescription processed — see results below",
                                      state="complete", expanded=False)
+                    try:
+                        prog.progress(100, text="Done — cards below ↓")
+                    except Exception:
+                        pass
 
-                    # Glanceable summary before the details
+                    # Risk band (MedSafe-style 0-100) + glanceable metrics
+                    _risk, _band = risk_score(checks, review_flags, final_result.get("medications", []))
+                    _cls = "risk-low" if _band == "LOW" else ("risk-mod" if _band == "MODERATE" else "risk-high")
+                    st.markdown(f'<div class="risk-banner {_cls}"><b>Risk {_risk}/100 · {_band}</b> — {len(final_result.get("medications", []))} lines, {sum(1 for c in checks if c.get("status","").startswith(("Verified","Auto-corrected")))} proven, {len(review_flags)} need your eyes.</div>', unsafe_allow_html=True)
                     verified = sum(1 for c in checks if c.get("status", "").startswith(("Verified", "Auto-corrected")))
                     m1, m2, m3 = st.columns(3)
                     m1.metric("Medicines found", len(final_result.get("medications", [])))
                     m2.metric("Verified / corrected", verified)
                     m3.metric("Review flags", len(review_flags))
 
+                    # Medicine cards (RxCare pattern): plain words first, proof inside
+                    st.subheader("Each medicine, as a card")
+                    for m, c in zip(final_result.get("medications", []), checks):
+                        s = c.get("status", "")
+                        badge = "✓ VERIFIED" if s.startswith(("Verified", "Auto-corrected")) else ("~ PARTIAL" if "salt" in s.lower() else "! CHECK")
+                        bcls = "b-ok" if badge.startswith("✓") else ("b-mid" if "~" in badge else "b-low")
+                        st.markdown(f'<div class="med-card"><div class="med-head"><b>{m.get("name","")} <span class="meta">{m.get("dosage","")} · {m.get("frequency","")} · {m.get("duration","")}</span></b><span class="badge {bcls}">{badge}</span></div><div class="meta">{c.get("composition") or "-"} · {c.get("manufacturer") or "-"} · {c.get("pack_size") or "-"} | {s}</div></div>', unsafe_allow_html=True)
+                        alts = find_alternatives(c.get("composition", ""), exclude=c.get("match", ""), n=3)
+                        if alts:
+                            st.caption(f"Alternatives with same salt: {', '.join(alts)} (ask pharmacist)")
+
                     # Copy to clipboard: plain-text summary + JSON. st.code gives a
                     # native copy icon; the button below is an explicit one-click copy.
-                    st.subheader("Copy Results")
+                    st.subheader(L["copy"])
                     clipboard_text = format_results_for_clipboard(final_result, checks, review_flags)
                     render_copy_button(clipboard_text, button_text="Copy to Clipboard", key="rx_text")
                     st.code(clipboard_text, language="markdown")
@@ -806,7 +967,7 @@ def main():
                         st.caption("Doctor view shows JSON and full verification tables.")
 
                     # Export CSV/PDF
-                    st.subheader("Export")
+                    st.subheader(L["export"])
                     med_csv = pd.DataFrame(final_result.get("medications", [])).to_csv(index=False)
                     st.download_button("⬇️ Download medications CSV", med_csv, file_name=f"rx_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="dl_csv")
                     report = clipboard_text + "\n\n---\nVerification:\n" + "\n".join(f"{c['extracted']} -> {c['match']} ({c['status']})" for c in checks)
@@ -827,7 +988,7 @@ def main():
                     st.caption("Tip: Print this page (Ctrl+P) → Save as PDF for a formatted report.")
 
                     # AI medication chat (grounded on parsed result)
-                    st.subheader("💬 Ask about these medicines")
+                    st.subheader(L["chat"])
                     if "rx_chat" not in st.session_state: st.session_state.rx_chat = []
                     for role, msg in st.session_state.rx_chat:
                         st.chat_message(role).write(msg)
@@ -876,13 +1037,24 @@ def main():
                     remove_temp_folder(output_folder)
 
     with tab_hist:
-        st.subheader("📜 History (this session)")
+        st.subheader(L["history"])
         if not st.session_state.history:
-            st.caption("No prescriptions processed yet in this session.")
+            st.markdown('<div class="empty-state"><b>Nothing here yet.</b> Parse a prescription and it will appear with time, patient, and med count.</div>', unsafe_allow_html=True)
         else:
-            if st.button("Clear history", key="clear_hist"):
-                st.session_state.history = []
-                st.rerun()
+            if not st.session_state.confirm_clear:
+                if st.button("Clear history", key="clear_hist"):
+                    st.session_state.confirm_clear = True
+                    st.rerun()
+            else:
+                st.warning("Clear all  history entries? This cannot be undone.")
+                cc1, cc2 = st.columns(2)
+                if cc1.button("Yes, clear all", key="clear_yes"):
+                    st.session_state.history = []
+                    st.session_state.confirm_clear = False
+                    st.rerun()
+                if cc2.button("Keep history", key="clear_no"):
+                    st.session_state.confirm_clear = False
+                    st.rerun()
             for i, h in enumerate(st.session_state.history):
                 with st.expander(f"{h['ts']} — {h['patient'] or 'Unknown'} ({h['meds']} meds)", expanded=(i == 0)):
                     st.json(h["raw"])
