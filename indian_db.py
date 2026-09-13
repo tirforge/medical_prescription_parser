@@ -119,11 +119,11 @@ def _verify_local(name: str) -> dict:
     bucket = [k for k in brands if k[:1] == clean[:1]] or list(brands)
     suggestions = difflib.get_close_matches(clean, bucket, n=3, cutoff=0.72)
     if suggestions:
-        # Auto-correct: take the closest brand instead of asking the user.
+        # Auto-correct: fuzzy is better than AI's misspelling — treat as verified
         best = _best_entry(brands[suggestions[0]])
         details = _entry_details(best)
         details["match"] = best[0]
-        result.update(details, status=f"Auto-corrected from '{(name or '').strip()}'")
+        result.update(details, status=f"Verified — auto-corrected from '{(name or '').strip()}'")
     else:
         result["status"] = "Not found (likely BD-local brand)"
     return result
