@@ -44,9 +44,10 @@ html[data-theme="dark"] {
   --border:  oklch(30% 0.018 240);
   --accent:  oklch(74% 0.12 170);
 }
-html[data-font="lg"] body { font-size: 18px; }
-html[data-font="lg"] .med .d { font-size: 16px; }
-html[data-font="sm"] body { font-size: 14.5px; }
+html[data-font="lg"] body { font-size: 20px; }
+html[data-font="lg"] .med .d { font-size: 17px; }
+html[data-font="lg"] h1 { font-size: 68px; }
+html[data-font="sm"] body { font-size: 15px; }
 *, *::before, *::after { box-sizing: border-box; }
 html { -webkit-text-size-adjust: 100%; color-scheme: light; }
 body {
@@ -92,7 +93,9 @@ h3 { font-family: var(--font-display); font-size: var(--fs-h3); font-weight: 650
 .iconbtn[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
 .iconbtn svg { width: 18px; height: 18px; }
 .fontseg { display: inline-flex; border: 1px solid var(--border); border-radius: 999px; padding: 3px; gap: 2px; }
-.fontseg button { border: 0; background: transparent; border-radius: 999px; padding: 8px 12px; font-size: 13px; font-weight: 700; color: var(--muted); min-height: 38px; min-width: 44px; transition: background 0.15s ease, color 0.15s ease; }
+.fontseg button { border: 0; background: transparent; border-radius: 999px; padding: 11px 18px; font-size: 15px; font-weight: 800; color: var(--muted); min-height: 46px; min-width: 50px; transition: background 0.18s ease, color 0.18s ease, transform 0.12s ease; }
+.fontseg button:active { transform: scale(0.96); }
+.fontseg button[aria-pressed="true"] { transform: scale(1.02); }
 .fontseg button:hover { color: var(--fg); }
 .fontseg button[aria-pressed="true"] { background: var(--fg); color: var(--surface); }
 .pagefoot { padding-block: var(--gap-xl); color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
@@ -181,8 +184,17 @@ h3 { font-family: var(--font-display); font-size: var(--fs-h3); font-weight: 650
 @keyframes spin { to { transform: rotate(360deg); } }
 @keyframes slide { 0% { margin-left: -40%; } 100% { margin-left: 100%; } }
 @keyframes shimmer { 0% { filter: brightness(1); } 50% { filter: brightness(0.94); } 100% { filter: brightness(1); } }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-4px); } }
+@keyframes pop { 0% { transform: scale(0.96); opacity: 0; } 100% { transform: scale(1); opacity: 1; } }
+@keyframes slideDown { from { opacity: 0; transform: translateY(-10px); } to { opacity: 1; transform: none; } }
+.hero { animation: slideDown 0.7s cubic-bezier(0.2, 0, 0, 1) both; }
+.hero h1 { animation: rise 0.8s 0.1s both; }
+.hero .lead { animation: rise 0.6s 0.22s both; }
+.filechip { animation: pop 0.35s both; }
+.filechip:nth-of-type(2) { animation-delay: 0.06s; } .filechip:nth-of-type(3) { animation-delay: 0.12s; }
+.topnav { animation: slideDown 0.6s both; }
 .med { display: flex; gap: 12px; padding: 16px 4px; border-top: 1px solid var(--border); align-items: flex-start; animation: rise 0.45s cubic-bezier(0.2, 0, 0, 1) both; }
-.med:nth-of-type(2) { animation-delay: 0.06s; } .med:nth-of-type(3) { animation-delay: 0.12s; }
+.med:nth-of-type(2) { animation-delay: 0.06s; } .med:nth-of-type(3) { animation-delay: 0.12s; } .med:nth-of-type(4) { animation-delay: 0.18s; }
 .dot { width: 12px; height: 12px; border-radius: 50%; margin-top: 6px; flex: none; }
 .dot.g { background: var(--success); } .dot.a { background: var(--warn); } .dot.r { background: var(--danger); }
 .med b { font-size: 15.5px; font-weight: 650; }
@@ -208,7 +220,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
 .demo, .card { animation: rise 0.5s cubic-bezier(0.2, 0, 0, 1) both; }
 .js .rv { opacity: 0; transform: translateY(14px); }
 .js .rv.in { opacity: 1; transform: none; transition: opacity 0.5s cubic-bezier(0.2, 0, 0, 1), transform 0.5s cubic-bezier(0.2, 0, 0, 1); }
-@media (prefers-reduced-motion: reduce) { .med, .demo, .card, .loadbar i, .btn .spin, .skel, .btn-primary::after { animation: none !important; } .loadbar i, .btn { transition: none; } .js .rv { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .med, .demo, .card, .hero, .topnav, .filechip, .loadbar i, .btn .spin, .skel, .btn-primary::after { animation: none !important; } .loadbar i, .btn { transition: none; } .js .rv { opacity: 1; transform: none; } }
 </style>
 </head>
 <body>
