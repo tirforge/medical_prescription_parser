@@ -11,6 +11,8 @@ Endpoints:
 """
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse
+from pathlib import Path
 from typing import List
 import tempfile, os, shutil
 
@@ -39,7 +41,19 @@ def _deps():
 
 @app.get("/")
 def root():
+    # Serve the website UI at / if it exists — otherwise JSON (backward compat)
+    html = Path(__file__).parent / "rx-prescription-app.html"
+    if html.exists():
+        return FileResponse(str(html), media_type="text/html")
     return {"ok": True, "endpoints": ["/health", "/verify?name=Dolo 650", "/parse", "/chat"]}
+
+
+@app.get("/app")
+def app_page():
+    html = Path(__file__).parent / "rx-prescription-app.html"
+    if html.exists():
+        return FileResponse(str(html), media_type="text/html")
+    raise HTTPException(status_code=404, detail="rx-prescription-app.html not found")
 
 
 @app.get("/health")

@@ -524,13 +524,13 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       run(dropped);
     }
   });
-  var API = 'http://127.0.0.1:8000';
+  var API = location.protocol === 'file:' ? 'http://127.0.0.1:8000' : '';
   var apiUp = false;
   (function ping() {
-    fetch(API + '/health').then(function (r) { return r.json(); }).then(function (h) {
+    fetch((API || '') + '/health').then(function (r) { return r.json(); }).then(function (h) {
       apiUp = !!(h && h.ok);
       document.getElementById('apiText').textContent = apiUp
-        ? 'Backend online (localhost:8000) — uploads get real results.'
+        ? 'Backend online — uploads get real results.'
         : 'Backend offline — showing demo pattern instead.';
     }).catch(function () {
       document.getElementById('apiText').textContent = 'Backend offline — showing demo pattern instead. Run: uvicorn api:app --port 8000';
@@ -588,7 +588,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     if (apiUp) {
       var fd = new FormData();
       Array.prototype.forEach.call(files, function (f) { fd.append('files', f, f.name); });
-      live = fetch(API + '/parse', { method: 'POST', body: fd })
+      live = fetch((API || '') + '/parse', { method: 'POST', body: fd })
         .then(function (r) { if (!r.ok) throw 0; return r.json(); })
         .catch(function () { return null; });
     }
@@ -742,7 +742,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     if (!apiUp) { bubble('ai', 'Backend is offline — start it with: uvicorn api:app --port 8000'); return; }
     bubble('ai', '…');
     var log = document.getElementById('chatLog');
-    fetch(API + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, context: lastCtx }) })
+    fetch((API || '') + '/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ question: q, context: lastCtx }) })
       .then(function (r) { return r.json(); })
       .then(function (j) { log.lastChild.textContent = j.answer || 'No answer.'; })
       .catch(function () { log.lastChild.textContent = 'Chat failed — is the backend running?'; });

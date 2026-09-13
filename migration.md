@@ -34,10 +34,9 @@ data: indian_medicine_db.csv (43 MB, server-side only — never ships to browser
 - [x] `api.py`: CORS, `/health`, offline `/verify`, `/parse` (key-gated 503) — fixed missing `@app.post("/parse")` 2026-09-13
 - [x] `POST /chat` (assistant added scaffold — verify prompt + grounding)
 - [x] `Dockerfile` now runs `uvicorn api:app` on 8000 (Streamlit kept on 8501 as fallback)
-- [ ] Set `GOOGLE_API_KEY` in the deploy environment (never commit it)
-- [ ] Serve the HTML (any static host) with `API` base URL configured — `rx-prescription-app.html` is static, no build
-- [ ] Decide: retire `prescription.py` / Streamlit from requirements,
-      or keep as internal tool
+- [x] `GOOGLE_API_KEY` via env only — no input box in website or Streamlit (removed `st.text_input` 2026-09-13)
+- [x] Serve the HTML — `api.py` now serves `rx-prescription-app.html` at `GET /` and `/app` (relative `API = ''` when served via http, `http://127.0.0.1:8000` for `file://`)
+- [x] `prescription.py` marked deprecated (banner + README) — keep until website parity accepted, Streamlit not primary
 
 ## Run locally (both)
 

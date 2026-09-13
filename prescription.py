@@ -564,6 +564,7 @@ def enhance_with_preocr(src_path: str, dst_path: str, mode: str = "quality") -> 
 
 def main():
     st.markdown('<div class="hero rx-home"><h1>◉ RxCare — your prescription, explained like a good pharmacist would.</h1><p>Snap the handwritten paper. We read it with Gemini / Gemma vision, verify every line against <b>254,000 Indian brands (offline)</b> + NIH RxNorm + openFDA labels, and explain side effects &amp; interactions in plain words — with proof for your doctor.</p><div class="home-steps"><span><b>1 · Upload the paper</b> multi-page, paste, or one-click sample</span><span><b>2 · Each line gets proven</b> exact / corrected / salt + confidence</span><span><b>3 · Leave with clarity</b> effects, warnings, copy / CSV / PDF, Q&amp;A</span></div></div>', unsafe_allow_html=True)
+    st.info("ℹ️ Streamlit is deprecated — primary UI is **rx-prescription-app.html** at http://127.0.0.1:8000/ (see README/migration.md).")
     sweep_stale_outputs()
     global parser, GEMINI_MODEL
     parser = JsonOutputParser(pydantic_object=PrescriptionInformations)
