@@ -226,6 +226,15 @@ def image_model(inputs: dict) -> str | list[str] | dict:
         temperature=0,  # deterministic: same image must give same output every run
     )
     image_urls = [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}} for img in inputs['images']]
+    # few-shot from vector_store (accuracy_test + learning_corrections.jsonl)
+    few_shot = ""
+    try:
+        from vector_store import find_similar
+        sims = find_similar(inputs.get("prompt", "") or "prescription", k=2)
+        for name, gt in sims:
+            few_shot += f"\nExample from {name}:\n{gt[:600]}\n"
+    except Exception:
+        pass
     prompt = """
     You are an expert medical transcriptionist specializing in deciphering and accurately transcribing handwritten medical prescriptions. Your role is to meticulously analyze the provided prescription images and extract all relevant information with the highest degree of precision.
 
@@ -266,13 +275,13 @@ def image_model(inputs: dict) -> str | list[str] | dict:
     Additional notes: 
     - Monitor blood sugar levels daily.
     - Avoid sugary foods.
-
+""" + few_shot + """
     Your job is to extract and accurately transcribe the following details from the provided prescription images:
-    1. Patient's full name
-    2. Patient's age (handle different formats like "42y", "42yrs", "42", "42 years")
-    3. Patient's gender
-    4. Doctor's full name
-    5. Doctor's license number
+    1. Patient full name
+    2. Patient age (handle different formats like "42y", "42yrs", "42", "42 years")
+    3. Patient gender
+    4. Doctor full name
+    5. Doctor license number
     6. Prescription date (in YYYY-MM-DD format)
     7. List of medications including:
        - Medication name
@@ -287,7 +296,7 @@ def image_model(inputs: dict) -> str | list[str] | dict:
 
     Important Instructions:
     - Before extracting information, enhance the image for better readability if needed. Use techniques such as adjusting brightness, contrast, or applying filters to improve clarity.
-    - Ensure that each extracted field is accurate and clear. If any information is not legible or missing, indicate it as 'Not available'. 
+    - Ensure that each extracted field is accurate and clear. If any information is not legible or missing, indicate it as Not available. 
     - Do not guess or infer any information that is not clearly legible.
     - Do not make assumptions or guesses about missing information. 
     - Pay close attention to details like medication names, dosages, and frequencies. 

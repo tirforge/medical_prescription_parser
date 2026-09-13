@@ -570,6 +570,12 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     });
   })();
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]; }); }
+  function normalizeFrequencyHtml(s){
+    if(!s) return s;
+    var u = String(s).trim().toUpperCase().replace(/\./g,'').replace(/\s+/g,'');
+    var t = { 'OD':'Once a day','QD':'Once a day','1-0-0':'Once a day','BD':'Twice a day','BID':'Twice a day','1-0-1':'Twice a day','1+0+1':'Twice a day','TDS':'Three times a day','TID':'Three times a day','1-1-1':'Three times a day','QID':'Four times a day','SOS':'As needed','HS':'At bedtime','0-0-1':'Once at night' };
+    return t[u] || t[u.replace('+','-')] || s;
+  }
   var patientView = true;
   var demoHTML = res.innerHTML;
   function renderLive(payload) {
@@ -616,7 +622,8 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       var st = c.status || '';
       var ok = st.indexOf('Verified') === 0;
       function isNA(v){ return !v || /^\s*not available\s*$/i.test(String(v)); }
-      var doseParts = [m.dosage, m.frequency, m.duration].filter(function(v){ return v && !isNA(v); });
+      var freqNorm = normalizeFrequencyHtml(m.frequency);
+      var doseParts = [m.dosage, freqNorm, m.duration].filter(function(v){ return v && !isNA(v); });
       var dose = doseParts.join(' · ') || '—';
       rows.push([m.name || '', dose, st || '—']);
       html += '<div class="med"><span class="dot ' + (ok ? 'g' : 'r') + '" aria-hidden="true"></span><div><b>' + esc(m.name) + '</b><div class="d">' + esc(dose) + (c.composition && !isNA(c.composition) ? ' · ' + esc(c.composition) : '') + '</div></div><span class="conf ' + (ok ? 'ok' : 'low') + '">' + esc(st.slice(0, 24) || '—') + '</span></div>';
