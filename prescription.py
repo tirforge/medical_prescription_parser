@@ -3,21 +3,28 @@ import base64
 import os
 from typing import List
 from datetime import date, datetime
-from langchain.chains import TransformChain
 from langchain_core.messages import HumanMessage
-from langchain_openai import ChatOpenAI
-from langchain import globals
-from langchain_core.runnables import chain
+from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_core.globals import set_debug
+from langchain_core.runnables import chain, RunnableLambda
 from langchain_core.output_parsers import JsonOutputParser
-from langchain_core.pydantic_v1 import BaseModel, Field
+from pydantic import BaseModel, Field
 import glob
-from keys import OPENAI_API_KEY
+import re
+try:
+    from keys import GOOGLE_API_KEY
+except ImportError:
+    GOOGLE_API_KEY = ""
 import streamlit as st
 import pandas as pd
 import shutil
+from indian_db import verify_medicine as check_medicine_online
 
-os.environ["OPENAI_API_KEY"] = OPENAI_API_KEY
-globals.set_debug(False)
+os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY or os.environ.get("GOOGLE_API_KEY", "")
+# Free vision model valid Sept 2026: gemini-2.5-flash (2.0-flash retired June 1, 2026).
+# Lite fallback: gemini-2.5-flash-lite. Note 2.5-flash retires Oct 20, 2026 -> then gemini-3.5-flash.
+GEMINI_MODEL = os.environ.get("GEMINI_MODEL", "gemini-2.5-flash")
+set_debug(False)
 
 parser = None
 st.set_page_config(layout="wide")
@@ -57,17 +64,17 @@ def load_images(inputs: dict) -> dict:
     images_base64 = [encode_image(image_path) for image_path in image_paths]
     return {"images": images_base64}
 
-load_images_chain = TransformChain(
-    input_variables=["image_paths"],
-    output_variables=["images"],
-    transform=load_images
-    )
+load_images_chain = RunnableLambda(load_images)
 
 @chain
 def image_model(inputs: dict) -> str | list[str] | dict:
-    """Invoke model with images and prompt."""
-    model = ChatOpenAI(api_key=os.environ["OPENAI_API_KEY"], model="gpt-4o")
-    image_urls = [{"type": "image_url", "image_url": {"url": f"data:image/png;base64,{img}"}} for img in inputs['images']]
+    """Invoke Gemini vision model with images and prompt."""
+    model = ChatGoogleGenerativeAI(
+        model=GEMINI_MODEL,
+        google_api_key=os.environ.get("GOOGLE_API_KEY"),
+        temperature=0,  # deterministic: same image must give same output every run
+    )
+    image_urls = [{"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{img}"}} for img in inputs['images']]
     prompt = """
     You are an expert medical transcriptionist specializing in deciphering and accurately transcribing handwritten medical prescriptions. Your role is to meticulously analyze the provided prescription images and extract all relevant information with the highest degree of precision.
 
@@ -138,19 +145,18 @@ def image_model(inputs: dict) -> str | list[str] | dict:
     {images_content}
     """
     msg = model.invoke(
-    [HumanMessage(
-        content=[
-            {"type": "text", "text": prompt},
-            {"type": "text", "text": parser.get_format_instructions()},
-            *image_urls
-        ]
-    )],
-    temperature=0.5,   
-    stop=None,  
+        [HumanMessage(
+            content=[
+                {"type": "text", "text": prompt},
+                {"type": "text", "text": parser.get_format_instructions() if parser else ""},
+                *image_urls
+            ]
+        )],
     )
     return msg.content
 
 def get_prescription_informations(image_paths: List[str]) -> dict:
+    global parser
     parser = JsonOutputParser(pydantic_object=PrescriptionInformations)
     vision_prompt = """
     Given the images, provide all available information including:
@@ -177,6 +183,45 @@ session_state = st.session_state
 if 'uploaded_file' not in session_state:
     session_state.uploaded_file = None
 
+# Patterns that usually deserve a human second look.
+AMBIGUOUS_SUFFIX = re.compile(r'-(D|DS|Plus|Forte|SR|XR|CR|LS|MR|M|H|AM|HT|LD|HD|P)\b', re.I)
+INITIAL_ONLY = re.compile(r'\b[A-Z]\.')
+
+def build_review_flags(result: dict, checks: list) -> list:
+    """Heuristic human-review flags: future dates, initials-only names,
+    ambiguous drug suffixes, unverified spellings. Never silently 'fix' - just flag."""
+    flags = []
+    # 1. Prescription date sanity: cannot be in the future
+    d = result.get("prescription_date")
+    try:
+        if isinstance(d, datetime):
+            dd = d.date()
+        elif isinstance(d, date):
+            dd = d
+        else:
+            dd = datetime.fromisoformat(str(d)).date()
+        if dd > datetime.now().date():
+            flags.append(f"Prescription date {dd} is in the future - likely misread, please verify.")
+    except (ValueError, TypeError):
+        flags.append(f"Prescription date '{d}' could not be parsed - please verify.")
+    # 2. Initials-only doctor / patient names (e.g. 'Dr. P. Gomez')
+    for label, value in (("Doctor", result.get("doctor_name", "") or ""),
+                         ("Patient", result.get("patient_name", "") or "")):
+        words = value.replace("Dr.", "").strip().split()
+        if value and words and all(len(w.strip(".")) <= 1 or w.endswith(".") for w in words):
+            flags.append(f"{label} name '{value}' is initials-only - verify against signature/stamp.")
+        elif INITIAL_ONLY.search(value):
+            flags.append(f"{label} name '{value}' contains initials - verify spelling.")
+    # 3. Ambiguous medicine suffixes + unverified spellings
+    for c in checks or []:
+        nm = c.get("extracted", "")
+        if AMBIGUOUS_SUFFIX.search(nm):
+            flags.append(f"'{nm}': ambiguous suffix (-D/-Plus/-SR etc.) - confirm against the strip.")
+        if c.get("status", "").startswith(("Suggestion", "Not found")):
+            flags.append(f"'{nm}': {c['status']}.")
+    return flags
+
+
 def main():
     st.title('Medical Prescription Parsing')
     global parser
@@ -194,7 +239,7 @@ def main():
             f.write(uploaded_file.getbuffer())
 
         with st.expander("Prescription Image", expanded=False):
-            st.image(uploaded_file, caption='Uploaded Prescription Image.', use_column_width=True)
+            st.image(uploaded_file, caption='Uploaded Prescription Image.', width='stretch')
 
         with st.spinner('Processing Prescription...'):  
             final_result = get_prescription_informations([check_path])           
@@ -230,10 +275,32 @@ def main():
             st.write(df.to_html(classes='custom-table', index=False, escape=False), unsafe_allow_html=True)
 
             # Display medications in a separate table with custom styling
+            checks = []
             if 'medications' in final_result and final_result['medications']:
                 medications_df = pd.DataFrame(final_result['medications'])
                 st.subheader("Medications")
                 st.write(medications_df.to_html(classes='custom-table', index=False, escape=False), unsafe_allow_html=True)
+
+                # Online verification against the Indian medicine database (offline, ~254k brands)
+                with st.spinner('Verifying medicines (Indian DB)...'):
+                    checks = [check_medicine_online(m.get('name', '')) for m in final_result['medications']]
+                verify_df = pd.DataFrame([{
+                    'Extracted name': c['extracted'],
+                    'Indian DB match': c['match'] or '-',
+                    'Composition': c.get('composition', '') or '-',
+                    'Manufacturer': c.get('manufacturer', '') or '-',
+                    'Status': c['status'],
+                } for c in checks])
+                st.subheader("Medicine Verification (Indian DB)")
+                st.write(verify_df.to_html(classes='custom-table', index=False, escape=False), unsafe_allow_html=True)
+                st.caption("Source: open Indian Medicine Dataset (~254k brands). 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
+
+            # Human-review flags: never silently fix, always surface
+            review_flags = build_review_flags(final_result, checks)
+            for flag in review_flags:
+                st.warning(f"Please review: {flag}")
+            if not review_flags:
+                st.success("All sanity checks passed - no review flags.")
 
         # Delete temp folder
         remove_temp_folder(output_folder)

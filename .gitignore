@@ -1,0 +1,15 @@
+# Secrets - never commit
+keys.py
+.env
+credentials.json
+token.pickle
+
+# Heavy / reinstallable
+venv/
+models/
+__pycache__/
+*.pyc
+
+# Runtime leftovers
+Check_*/
+*.log

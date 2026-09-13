@@ -1,0 +1,17 @@
+{
+ "patient_name": "Aisha Khan",
+ "patient_age": 73,
+ "patient_gender": "Not available",
+ "doctor_name": "Dr. C. Rossi",
+ "doctor_license": "Not available",
+ "prescription_date": "2024-12-16",
+ "medications": [
+  {
+   "name": "Prednisone",
+   "dosage": "25 mg",
+   "frequency": "After meals",
+   "duration": "Not available"
+  }
+ ],
+ "additional_notes": "Not available"
+}

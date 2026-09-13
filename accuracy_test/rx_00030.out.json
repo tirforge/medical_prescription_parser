@@ -1,0 +1,35 @@
+{
+ "patient_name": "Jane Smith",
+ "patient_age": 26,
+ "patient_gender": "Not available",
+ "doctor_name": "Dr. R. Gomez",
+ "doctor_license": "Not available",
+ "prescription_date": "2024-12-26",
+ "medications": [
+  {
+   "name": "Amoxicillin",
+   "dosage": "50 mg",
+   "frequency": "With meals",
+   "duration": "Not available"
+  },
+  {
+   "name": "Acetaminophen",
+   "dosage": "500 mg",
+   "frequency": "At bedtime",
+   "duration": "Not available"
+  },
+  {
+   "name": "Gabapentin",
+   "dosage": "25 mg",
+   "frequency": "After meals",
+   "duration": "Not available"
+  },
+  {
+   "name": "Simvastatin",
+   "dosage": "20 mg",
+   "frequency": "Every 72 hours",
+   "duration": "Not available"
+  }
+ ],
+ "additional_notes": "No additional general notes."
+}

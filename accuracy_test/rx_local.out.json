@@ -1,0 +1,59 @@
+{
+ "patient_name": "Zahidul Hashan",
+ "patient_age": 37,
+ "patient_gender": "Not available",
+ "doctor_name": "Dr. S.K. M. Zainal Abedin",
+ "doctor_license": "Not available",
+ "prescription_date": "2010-11-18T00:00:00Z",
+ "medications": [
+  {
+   "name": "Ultrafen plus",
+   "dosage": "50 mg",
+   "frequency": "Twice a day",
+   "duration": "Not available"
+  },
+  {
+   "name": "Relentus",
+   "dosage": "Not available",
+   "frequency": "Once a day",
+   "duration": "Not available"
+  },
+  {
+   "name": "Brompton",
+   "dosage": "200 mg",
+   "frequency": "Twice a day",
+   "duration": "21 days"
+  },
+  {
+   "name": "Ulmeal-D",
+   "dosage": "Not available",
+   "frequency": "Twice a day",
+   "duration": "Not available"
+  },
+  {
+   "name": "Cartilix",
+   "dosage": "Not available",
+   "frequency": "Twice a day",
+   "duration": "Not available"
+  },
+  {
+   "name": "Diclofenac",
+   "dosage": "50 mg",
+   "frequency": "Twice a day",
+   "duration": "Not available"
+  },
+  {
+   "name": "Ultracal-D",
+   "dosage": "Not available",
+   "frequency": "Twice a day",
+   "duration": "10 days"
+  },
+  {
+   "name": "Omeprazole",
+   "dosage": "Not available",
+   "frequency": "Twice a day",
+   "duration": "Not available"
+  }
+ ],
+ "additional_notes": "Initial Visit (Date: 2010-11-18):\n- Chief Complaint: Right knee pain for 1 month.\n- Symptoms: Difficulty going up stairs.\n- Findings: No bony lesion observed.\n- Investigations Advised: X-ray of Right knee (AP, Lateral, Axial, Tunnel view).\n\nFollow-up Visit (Date: 2010-12-11):\n- Investigations Advised: MRI of Right Knee.\n- Recommendations:\n  - Use a Right Knee Cap.\n  - Undergo Physiotherapy and exercises for the Right Knee."
+}

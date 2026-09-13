@@ -4,13 +4,10 @@ pandas
 pydantic
 python-dotenv
 
-# OpenAI Integration
+# Gemini Integration (free vision model)
 langchain
 langchain-core
-langchain-openai
+langchain-google-genai
 
 # Image Processing
 Pillow
-
-# Other Utilities
-base64
