@@ -292,12 +292,18 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
               </label>
               <input type="file" id="filePick" accept="image/*,.pdf" multiple aria-label="Choose prescription files" />
               <input type="file" id="camPick" accept="image/*" capture="environment" hidden />
+              <input type="file" id="folderPick" webkitdirectory directory multiple hidden />
               <div class="row" style="justify-content: center; margin-top: 12px;">
                 <button class="btn btn-secondary" id="sampleBtn">Use sample scan</button>
               </div>
               <div class="row" style="justify-content: center; margin-top: 12px; gap: 12px;">
                 <button class="btn btn-secondary" id="camBtn" aria-label="Take photo with camera">📷 Take photo</button>
                 <button class="btn btn-secondary" id="pasteBtn" aria-label="Paste image from clipboard">📋 Paste from clipboard</button>
+                <button class="btn btn-secondary" id="folderBtn" aria-label="Select folder">📁 Folder</button>
+              </div>
+              <div id="previewWrap" hidden style="display: grid; grid-template-columns: 1fr 1fr; gap: 12px; margin-top: 12px;">
+                <div><b>Original</b><br><img id="previewOrig" style="max-width: 100%; border-radius: 8px; border: 1px solid var(--border);"></div>
+                <div><b>Enhanced</b><br><img id="previewEnh" style="max-width: 100%; border-radius: 8px; border: 1px solid var(--border); filter: contrast(1.15) brightness(1.05) grayscale(0.1);"></div>
               </div>
               <div class="filechips" id="fileChips"></div>
               <div class="fileline" id="fileLine" role="status"></div>
@@ -528,6 +534,16 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       m.textContent = '+' + (files.length - 4) + ' more';
       chips.appendChild(m);
     }
+    // before/after preview (first image)
+    var pw = document.getElementById('previewWrap');
+    var o = document.getElementById('previewOrig');
+    var e = document.getElementById('previewEnh');
+    if (files.length && files[0] && files[0].type && files[0].type.startsWith('image/')) {
+      var url = URL.createObjectURL(files[0]);
+      o.src = url; e.src = url; pw.hidden = false;
+    } else {
+      pw.hidden = true;
+    }
   }
   ['dragenter', 'dragover'].forEach(function (ev) {
     zone.addEventListener(ev, function (e) { e.preventDefault(); zone.classList.add('over'); });
@@ -574,6 +590,21 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     var dateLine = (!isNA(r.prescription_date) ? String(r.prescription_date).slice(0, 10) : '');
     if (patientParts.length || doctorParts.length || dateLine) {
       html += '<div class="card" style="margin-bottom:12px"><b>Patient:</b> ' + esc(patientParts.join(' · ') || '—') + '<br><b>Doctor:</b> ' + esc(doctorParts.join(' · ') || '—') + '<br><b>Date:</b> ' + esc(dateLine || '—') + '</div>';
+    }
+    if (r._confidence) {
+      var conf = r._confidence;
+      var confHtml = '<div class="card" style="font-size:13px"><b>Confidence:</b> ';
+      for (var k in conf) {
+        if (k === 'medications') continue;
+        var v = conf[k];
+        var col = v === 'high' ? 'var(--success)' : v === 'medium' ? 'var(--warn)' : 'var(--danger)';
+        confHtml += '<span style="color:'+col+'">● '+esc(k)+':'+esc(v)+'</span> ';
+      }
+      if (conf.medications && conf.medications.length) {
+        confHtml += '<br><b>Meds:</b> ' + conf.medications.map(function(c,i){ var col2=c==='high'?'var(--success)':c==='medium'?'var(--warn)':'var(--danger)'; return '<span style="color:'+col2+'">'+(i+1)+':'+c+'</span>'; }).join(' ');
+      }
+      confHtml += '</div>';
+      html += confHtml;
     }
     if (r.additional_notes && !isNA(r.additional_notes)) {
       var notes = String(r.additional_notes).replace(/<[^>]*>/g, ' ').replace(/\s+/g, ' ').trim();
@@ -673,11 +704,16 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     document.querySelectorAll('[data-doctor]').forEach(function (e) { e.hidden = patientView; });
   }
   pick.addEventListener('change', function () { run(); });
-  // Photo capture + clipboard paste (missing before)
+  // Photo capture + clipboard paste + folder batch (missing before)
   var camPick = document.getElementById('camPick');
   if (camPick) {
     document.getElementById('camBtn').addEventListener('click', function () { camPick.click(); });
     camPick.addEventListener('change', function () { if (camPick.files.length) run(camPick.files); });
+  }
+  var folderPick = document.getElementById('folderPick');
+  if (folderPick) {
+    document.getElementById('folderBtn').addEventListener('click', function () { folderPick.click(); });
+    folderPick.addEventListener('change', function () { if (folderPick.files.length) run(folderPick.files); });
   }
   var pasteBtn = document.getElementById('pasteBtn');
   if (pasteBtn) {
