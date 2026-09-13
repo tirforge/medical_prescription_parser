@@ -57,6 +57,20 @@ def _chain(primary: str = "") -> list[str]:
             seen.add(m); out.append(m)
     return out
 
+def _clean_chat_answer(ans: str) -> str:
+    """Strip markdown clutter the LLM adds (bullets, **bold**, *italic* disclaimers)
+    since the frontend renders the answer as plain text (textContent)."""
+    import re
+    s = (ans or "").strip()
+    # bullet markers at line start (* / - / •) -> plain line
+    s = re.sub(r"^\s*[\*\-•]\s+", "", s, flags=re.M)
+    # **bold** -> bold (keep inner text)
+    s = re.sub(r"\*\*(.+?)\*\*", r"\1", s, flags=re.S)
+    # any remaining stray asterisks (e.g. *Disclaimer...*)
+    s = s.replace("*", "")
+    s = re.sub(r"\n{3,}", "\n\n", s)
+    return s.strip()
+
 def _deps():
     out = {}
     for mod in ("fastapi", "streamlit", "pandas", "PIL",
@@ -193,7 +207,7 @@ def _chat_worker(question: str, context: str, mode: str) -> dict:
         m = _re2.search(r"DB: '([^']+)' not in Indian registry", db_ctx)
         if m:
             drug = m.group(1)
-            return {"answer": f"{drug} not found in Indian registry (254k brands) — may be a Bangladesh-local brand or misspelling. Please check the strip spelling, manufacturer and QR, and consult a pharmacist. Not medical advice."}
+            return {"answer": _clean_chat_answer(f"{drug} not found in Indian registry (254k brands) — may be a Bangladesh-local brand or misspelling. Please check the strip spelling, manufacturer and QR, and consult a pharmacist. Not medical advice.")}
     # chat with ordered fallback 3.6 -> 3.6-lite -> 3.5 -> 3.5-lite -> 3.1 -> 3.1-lite -> gemma
     from langchain_google_genai import ChatGoogleGenerativeAI
     from langchain_core.messages import HumanMessage
@@ -220,7 +234,7 @@ def _chat_worker(question: str, context: str, mode: str) -> dict:
             if isinstance(ans, list):
                 ans = " ".join(b.get("text","") for b in ans if isinstance(b, dict) and b.get("type")=="text")
             _remember_last_model(model)
-            return {"answer": ans, "model": model}
+            return {"answer": _clean_chat_answer(ans), "model": model}
         except Exception as e:
             msg = str(e).lower()
             last_err = e
