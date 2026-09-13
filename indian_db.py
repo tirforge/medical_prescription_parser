@@ -101,6 +101,9 @@ def _verify_local(name: str) -> dict:
     if not clean:
         result["status"] = "Skipped (no name)"
         return result
+    # US -> Indian spelling for salts (amoxicillin vs amoxycillin)
+    if clean == "amoxicillin":
+        clean = "amoxycillin"
 
     # 1. Exact brand match
     if clean in brands:
@@ -118,9 +121,9 @@ def _verify_local(name: str) -> dict:
                           composition=tok, status="Verified - salt in Indian DB")
             return result
 
-    # 3. Fuzzy brand suggestion (bucket by initial for speed)
+    # 3. Fuzzy brand suggestion (bucket by initial for speed) — 0.75 allows ultrafen-plus->ultra plus (0.78) but blocks amoxicillin->amicline (0.73)
     bucket = bucket_map.get(clean[:1], []) or list(brands.keys())
-    suggestions = difflib.get_close_matches(clean, bucket, n=3, cutoff=0.72)
+    suggestions = difflib.get_close_matches(clean, bucket, n=3, cutoff=0.75)
     if suggestions:
         # Auto-correct: fuzzy is better than AI's misspelling — treat as verified
         best = _best_entry(brands[suggestions[0]])
