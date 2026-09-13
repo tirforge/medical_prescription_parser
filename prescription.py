@@ -593,6 +593,12 @@ def main():
 
                 with st.expander(f"Prescription Images ({len(saved_paths)})", expanded=False):
                     st.image(saved_paths, caption=[os.path.basename(p) for p in saved_paths], width="stretch")
+                if enhance and model_paths != saved_paths:
+                    with st.expander("✨ Enhance preview (original vs denoised)", expanded=False):
+                        for orig, enh in zip(saved_paths, model_paths):
+                            c1, c2 = st.columns(2)
+                            c1.image(orig, caption="Original", width="stretch")
+                            c2.image(enh, caption="Enhanced (denoise+deskew)", width="stretch")
 
                 with st.status("Processing prescription...", expanded=True) as st_status:
                     st_status.write("🔍 Reading handwriting with vision model...")
@@ -749,6 +755,15 @@ def main():
                         json_text = json.dumps(final_result, indent=2, default=str)
                         render_copy_button(json_text, button_text="Copy JSON", key="rx_json")
                         st.code(json_text, language="json")
+
+                    # Save to session history
+                    st.session_state.history.insert(0, {
+                        "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "patient": final_result.get("patient_name", ""),
+                        "meds": len(final_result.get("medications", [])),
+                        "raw": final_result,
+                    })
+                    st.session_state.history = st.session_state.history[:20]
 
                 # Delete temp folder
             finally:
