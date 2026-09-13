@@ -143,11 +143,11 @@ os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY or os.environ.get("GOOGLE_API_KEY"
 #   gemini-2.5-flash(-lite), 3.x Flash ....... 5-10 RPM, 20 RPD <- tight
 # Override via GEMINI_MODEL env or the sidebar picker.
 MODEL_CHOICES = [
-    "gemini-3.5-flash-lite",  # default: fast + accurate, 500/day
-    "gemma-4-26b-a4b-it",     # slower but 14,400/day quota
-    "gemma-4-31b-it",         # max quality, 14,400/day quota
+    "gemini-3.6-flash",       # default: latest vision, free tier, best handwriting
+    "gemini-3.5-flash-lite",  # fallback: fast, 500/day
+    "gemma-4-26b-a4b-it",     # fallback: 14,400/day quota
+    "gemma-4-31b-it",
     "gemini-2.5-flash-lite",
-    "gemini-2.5-flash",
 ]
 GEMINI_MODEL = os.environ.get("GEMINI_MODEL", MODEL_CHOICES[0])
 set_debug(False)

@@ -124,7 +124,7 @@ async def chat(body: dict):
         from langchain_google_genai import ChatGoogleGenerativeAI
         from langchain_core.messages import HumanMessage
         llm = ChatGoogleGenerativeAI(
-            model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            model=os.environ.get("GEMINI_MODEL", "gemini-3.6-flash"),
             google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
             temperature=0,
         )
