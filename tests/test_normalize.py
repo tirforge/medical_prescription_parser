@@ -1,10 +1,10 @@
 from prescription import normalize_frequency, dedupe_medications
 
 def test_normalize():
-    assert normalize_frequency("OD") == "1-0-0"
-    assert normalize_frequency("bd") == "1-0-1"
-    assert normalize_frequency("TDS") == "1-1-1"
-    assert normalize_frequency("1 - 0 - 1") == "1-0-1"
+    assert normalize_frequency("OD") == "Once a day"
+    assert normalize_frequency("bd") == "Twice a day"
+    assert normalize_frequency("TDS") == "Three times a day"
+    assert normalize_frequency("1 - 0 - 1") == "Twice a day"
     assert normalize_frequency("twice daily") == "twice daily"
 
 def test_dedupe():
