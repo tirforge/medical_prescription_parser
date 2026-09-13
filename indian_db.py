@@ -1,5 +1,7 @@
 """Offline verification against the open Indian Medicine Dataset
-(junioralive/Indian-Medicine-Dataset, ~254k brands, name + composition + manufacturer).
+(junioralive/Indian-Medicine-Dataset, ~254k brands).
+Updated 2026-09-13 to use updated_indian_medicine_data.csv (43MB) which adds
+medicine_desc, side_effects, drug_interactions, salt_composition.
 No API key, no internet needed after the one-time CSV download.
 """
 import csv
@@ -22,7 +24,7 @@ def _clean(name: str) -> str:
 
 @st.cache_resource(show_spinner=False)
 def _load_db():
-    """Returns (brands, salts): brands maps base-name -> [(full, comp, mfr, active)], salts maps salt -> [count, example]."""
+    """Returns (brands, salts): brands maps base-name -> [(full, comp, mfr, active, price, pack, mtype, desc, se, di, salt)], salts maps salt -> [count, example]."""
     brands: dict = {}
     salts: dict = {}
     with open(DB_PATH, newline="", encoding="utf-8", errors="replace") as f:
@@ -35,12 +37,20 @@ def _load_db():
                 x.strip() for x in (row.get("short_composition1", ""), row.get("short_composition2", ""))
                 if x.strip()
             )
+            # Fallback: some rows have empty short_composition but salt_composition is populated
+            if not comp:
+                comp = (row.get("salt_composition") or "").strip()
             mfr = (row.get("manufacturer_name") or "").strip()
-            price = (row.get("price(₹)") or "").strip()
+            # New CSV uses 'price' without (₹); old used 'price(₹)'
+            price = (row.get("price(₹)") or row.get("price") or "").strip()
             pack = (row.get("pack_size_label") or "").strip()
             mtype = (row.get("type") or "").strip()
+            desc = (row.get("medicine_desc") or "").strip()
+            se = (row.get("side_effects") or "").strip()
+            di = (row.get("drug_interactions") or "").strip()
+            salt_comp = (row.get("salt_composition") or "").strip()
             active = (row.get("Is_discontinued") or "").strip().upper() != "TRUE"
-            brands.setdefault(base, []).append((full, comp, mfr, active, price, pack, mtype))
+            brands.setdefault(base, []).append((full, comp, mfr, active, price, pack, mtype, desc, se, di, salt_comp))
             for tok in set(re.split(r"[^a-z]+", comp.lower())):
                 if len(tok) >= 5:
                     entry = salts.setdefault(tok, [0, full])
@@ -57,10 +67,13 @@ def _best_entry(entries):
 
 
 def _entry_details(entry):
-    """Unpack a brand entry into display fields (price/pack/type included)."""
-    full, comp, mfr, _active, price, pack, mtype = entry
+    """Unpack a brand entry into display fields."""
+    # Tuple: (full, comp, mfr, active, price, pack, mtype, desc, se, di, salt_comp)
+    full, comp, mfr, _active, price, pack, mtype, desc, se, di, salt_comp = entry
     return {"match": full, "composition": comp, "manufacturer": mfr,
-            "price": price, "pack_size": pack, "med_type": mtype}
+            "price": price, "pack_size": pack, "med_type": mtype,
+            "medicine_desc": desc, "side_effects_db": se, "drug_interactions_db": di,
+            "salt_composition": salt_comp}
 
 
 @st.cache_data(ttl=86400, show_spinner=False)
@@ -73,8 +86,9 @@ def verify_medicine(name: str) -> dict:
 @st.cache_data(ttl=86400, show_spinner=False)
 def _verify_local(name: str) -> dict:
     result = {"extracted": name, "match": "", "composition": "", "manufacturer": "",
-              "price": "", "pack_size": "", "med_type": "", "salt_count": 0,
-              "salt_example": "", "status": "Not checked"}
+              "price": "", "pack_size": "", "med_type": "", "medicine_desc": "",
+              "side_effects_db": "", "drug_interactions_db": "", "salt_composition": "",
+              "salt_count": 0, "salt_example": "", "status": "Not checked"}
     try:
         brands, salts = _load_db()
     except FileNotFoundError:

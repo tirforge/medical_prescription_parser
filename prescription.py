@@ -491,13 +491,21 @@ def main():
                 for ok, text in sig["signals"]:
                     icon = "✅" if ok is True else ("⚠️" if ok is None else "❌")
                     st.markdown(f"{icon} {text}")
+                native_se2 = (check.get("side_effects_db") or "").strip()
+                if native_se2:
+                    se_line = native_se2[:250]
+                else:
+                    se_line = simple.get(name.lower(), '') or safety.get('side_effects', '')[:250] or 'No entry — verify with pharmacist.'
                 st.markdown(
                     f"**Composition:** {check.get('composition') or '-'}  \n"
                     f"**Manufacturer:** {check.get('manufacturer') or '-'}  \n"
                     f"**Pack:** {check.get('pack_size') or '-'} | **Type:** {check.get('med_type') or '-'}  \n"
                     f"**RxNorm:** {rx.get('matched_name') or rx.get('status')}  \n"
-                    f"**Common side effects:** {simple.get(name.lower(), '') or safety.get('side_effects', '')[:250] or 'No FDA entry — verify with pharmacist.'}"
+                    f"**Side effects:** {se_line}"
                 )
+                if check.get("medicine_desc"):
+                    with st.expander("What it is for (Indian DB)", expanded=False):
+                        st.write(check["medicine_desc"][:1200])
                 if safety.get("source_url"):
                     st.markdown(f"[Full label on DailyMed]({safety['source_url']})")
                 st.markdown(
@@ -662,13 +670,22 @@ def main():
                                 )
                             if safety.get("boxed_warning"):
                                 st.error(f"Boxed warning: {safety['boxed_warning']}")
-                            simple = (simple_map.get((mname or '').lower()) or "").strip()
-                            if simple:
-                                st.markdown(f"**Common side effects:** {simple}")
+                            native_se = (c.get("side_effects_db") or "").strip()
+                            native_di = (c.get("drug_interactions_db") or "").strip()
+                            if native_se:
+                                st.markdown(f"**Side effects (Indian DB):** {native_se[:800]}")
+                            elif (simple_map.get((mname or '').lower()) or "").strip():
+                                st.markdown(f"**Common side effects:** {(simple_map.get((mname or '').lower()) or '').strip()}")
                             elif safety.get("side_effects"):
-                                st.markdown(f"**Side effects:** {safety['side_effects'][:300]}")
+                                st.markdown(f"**Side effects (FDA):** {safety['side_effects'][:300]}")
                             else:
-                                st.caption("No FDA side-effect entry (common for India-local brands).")
+                                st.caption("No side-effect entry.")
+                            if c.get("medicine_desc"):
+                                with st.expander("What it is for (Indian DB)", expanded=False):
+                                    st.write(c["medicine_desc"][:1200])
+                            if native_di:
+                                with st.expander("⚠️ Drug interactions (Indian DB)", expanded=False):
+                                    st.write(native_di[:1200])
                             if safety.get("source_url"):
                                 st.markdown(f"[Full label on DailyMed]({safety['source_url']}) · Source: {safety['source']}")
                             st.caption(f"Prescribed: {m.get('dosage','')} | {m.get('frequency','')} | {m.get('duration','')}")
