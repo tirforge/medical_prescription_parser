@@ -74,13 +74,48 @@ def verify(name: str):
 
 @app.post("/chat")
 async def chat(body: dict):
-    """Grounded medication Q&A scoped to a parse result. Needs GOOGLE_API_KEY."""
+    """Grounded medication Q&A - answers about any drug, not just prescription context."""
     question = (body.get("question") or "").strip()
     context = str(body.get("context") or "")[:3000]
     if not question:
         raise HTTPException(status_code=400, detail="question required")
     if not os.environ.get("GOOGLE_API_KEY"):
         raise HTTPException(status_code=503, detail="GOOGLE_API_KEY not set on server")
+    # Enrich with Indian DB lookup for any drug mentioned in question
+    db_ctx = ""
+    try:
+        from indian_db import verify_medicine
+        import re
+        # extract candidate drug tokens (3+ chars) and bigrams like "Rosidan PD"
+        toks = re.findall(r"[A-Za-z]{3,}", question)
+        # also try bigrams
+        bigrams = [" ".join(toks[i:i+2]) for i in range(len(toks)-1)]
+        candidates = toks + bigrams
+        seen = set()
+        for cand in candidates:
+            lc = cand.lower()
+            if lc in seen or len(lc) < 3:
+                continue
+            seen.add(lc)
+            try:
+                chk = verify_medicine(cand)
+                if chk.get("status", "").startswith("Verified"):
+                    db_ctx += f"\nDB hit for '{cand}': {chk.get('match')} | {chk.get('composition')} | {chk.get('manufacturer','')} | {chk.get('medicine_desc','')[:400]} | Side effects: {chk.get('side_effects_db','')[:400]}"
+                elif "Not found" in chk.get("status","") and len(cand) >= 4:
+                    if cand.lower() not in {"what","sideeffect","side","effect","whatis","is","of","the","and","for","with","a","an"}:
+                        db_ctx += f"\nDB: '{cand}' not in Indian registry (254k) — may be BD-local or misspelled."
+            except Exception:
+                pass
+            if len(db_ctx) > 1500:
+                break
+    except Exception:
+        pass
+    # Direct not-found answer for main drug to avoid hallucination (Sato, Rosidan PD)
+    import re as _re2
+    m = _re2.search(r"DB: '([^']+)' not in Indian registry", db_ctx)
+    if m:
+        drug = m.group(1)
+        return {"answer": f"{drug} not found in Indian registry (254k brands) — may be a Bangladesh-local brand or misspelling. Please check the strip spelling, manufacturer and QR, and consult a pharmacist. Not medical advice."}
     try:
         from langchain_google_genai import ChatGoogleGenerativeAI
         from langchain_core.messages import HumanMessage
@@ -89,10 +124,15 @@ async def chat(body: dict):
             google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
             temperature=0,
         )
-        ans = llm.invoke([HumanMessage(content=(
-            f"Context prescription JSON: {context}\nQuestion: {question}\n"
-            "Answer concisely, not medical advice, cite composition if relevant."
-        ))]).content
+        prompt = (
+            f"Prescription context (may be empty): {context}\n"
+            f"Indian DB lookup for question terms:{db_ctx or ' (no DB hit)'}\n"
+            f"Question: {question}\n"
+            "Answer helpfully and concisely in plain English. If DB gives side effects/composition, cite them. "
+            "If DB says Not found, say so plainly and suggest checking the strip spelling or manufacturer. "
+            "Never invent side effects not in DB. Not medical advice — advise see doctor/pharmacist."
+        )
+        ans = llm.invoke([HumanMessage(content=prompt)]).content
         if isinstance(ans, list):
             ans = " ".join(b.get("text", "") for b in ans if isinstance(b, dict) and b.get("type") == "text")
         return {"answer": ans}
