@@ -582,208 +582,208 @@ def main():
             os.makedirs(output_folder, exist_ok=True)
 
             saved_paths: list = []
-        for name, data in inputs:
-            p = os.path.join(output_folder, name)
-            with open(p, "wb") as f:
-                f.write(data)
-            saved_paths.append(p)
+            for name, data in inputs:
+                p = os.path.join(output_folder, name)
+                with open(p, "wb") as f:
+                    f.write(data)
+                saved_paths.append(p)
 
-        if enhance and HAS_PREOCR:
-            model_paths: list = []
-            with st.spinner("Enhancing images (denoise + deskew)..."):
-                for p in saved_paths:
-                    base, _ext = os.path.splitext(p)
-                    final_path, meta = enhance_with_preocr(p, f"{base}_enhanced.png")
-                    model_paths.append(final_path)
-                    applied = ", ".join(meta.get("applied_steps", [])) or "none"
-                    skipped = ", ".join(str(s) for s in meta.get("skipped_steps", []))
-                    st.caption(f"{os.path.basename(p)} → applied: {applied}" + (f" | skipped: {skipped}" if skipped else ""))
-        else:
-            model_paths = saved_paths
+            if enhance and HAS_PREOCR:
+                model_paths: list = []
+                with st.spinner("Enhancing images (denoise + deskew)..."):
+                    for p in saved_paths:
+                        base, _ext = os.path.splitext(p)
+                        final_path, meta = enhance_with_preocr(p, f"{base}_enhanced.png")
+                        model_paths.append(final_path)
+                        applied = ", ".join(meta.get("applied_steps", [])) or "none"
+                        skipped = ", ".join(str(s) for s in meta.get("skipped_steps", []))
+                        st.caption(f"{os.path.basename(p)} → applied: {applied}" + (f" | skipped: {skipped}" if skipped else ""))
+            else:
+                model_paths = saved_paths
 
-        with st.expander(f"Prescription Images ({len(saved_paths)})", expanded=False):
-            st.image(saved_paths, caption=[os.path.basename(p) for p in saved_paths], width="stretch")
+            with st.expander(f"Prescription Images ({len(saved_paths)})", expanded=False):
+                st.image(saved_paths, caption=[os.path.basename(p) for p in saved_paths], width="stretch")
 
-        with st.status("Processing prescription...", expanded=True) as st_status:
-            st_status.write("🔍 Reading handwriting with vision model...")
-            final_result = get_prescription_informations(model_paths)
-            final_result["medications"] = dedupe_medications(final_result.get("medications"))
-            st_status.write("✅ Reading done — verifying medicines...")           
-            # Process and display results
-            if 'additional_notes' in final_result:
-                additional_notes = final_result['additional_notes']
-                # Format additional notes as bullet points
-                if isinstance(additional_notes, list):
-                    formatted_notes = "<br> ".join(additional_notes)
-                else:
-                    formatted_notes = additional_notes.replace("\n", "<br> ")
-                final_result['additional_notes'] = f"<ul><li>{formatted_notes}</li></ul>"
+            with st.status("Processing prescription...", expanded=True) as st_status:
+                st_status.write("🔍 Reading handwriting with vision model...")
+                final_result = get_prescription_informations(model_paths)
+                final_result["medications"] = dedupe_medications(final_result.get("medications"))
+                st_status.write("✅ Reading done — verifying medicines...")           
+                # Process and display results
+                if 'additional_notes' in final_result:
+                    additional_notes = final_result['additional_notes']
+                    # Format additional notes as bullet points
+                    if isinstance(additional_notes, list):
+                        formatted_notes = "<br> ".join(additional_notes)
+                    else:
+                        formatted_notes = additional_notes.replace("\n", "<br> ")
+                    final_result['additional_notes'] = f"<ul><li>{formatted_notes}</li></ul>"
 
-            # # Convert final_result to a list of tuples for DataFrame creation
-            # data = [(key, final_result[key]) for key in final_result if key != 'medications']
-            # df = pd.DataFrame(data, columns=["Field", "Value"])
+                # # Convert final_result to a list of tuples for DataFrame creation
+                # data = [(key, final_result[key]) for key in final_result if key != 'medications']
+                # df = pd.DataFrame(data, columns=["Field", "Value"])
 
-            # # Display the DataFrame with bullet points
-            # st.write(df.to_html(escape=False), unsafe_allow_html=True)
+                # # Display the DataFrame with bullet points
+                # st.write(df.to_html(escape=False), unsafe_allow_html=True)
 
-            # # Display medications in a separate table
-            # if 'medications' in final_result and final_result['medications']:
-            #     medications_df = pd.DataFrame(final_result['medications'])
-            #     st.subheader("Medications")
-            #     st.table(medications_df)
+                # # Display medications in a separate table
+                # if 'medications' in final_result and final_result['medications']:
+                #     medications_df = pd.DataFrame(final_result['medications'])
+                #     st.subheader("Medications")
+                #     st.table(medications_df)
 
 
-            # Convert final_result to a list of tuples for display
-            data = [(key, _strip_html(final_result[key]) if key == "additional_notes" else final_result[key])
-                    for key in final_result if key != 'medications']
-            df = pd.DataFrame(data, columns=["Field", "Value"])
+                # Convert final_result to a list of tuples for display
+                data = [(key, _strip_html(final_result[key]) if key == "additional_notes" else final_result[key])
+                        for key in final_result if key != 'medications']
+                df = pd.DataFrame(data, columns=["Field", "Value"])
 
-            # Theme-aware tables (readable in light + dark mode)
-            st.dataframe(df, width="stretch", hide_index=True)
+                # Theme-aware tables (readable in light + dark mode)
+                st.dataframe(df, width="stretch", hide_index=True)
 
-            # Display medications in a separate table with custom styling
-            checks = []
-            if 'medications' in final_result and final_result['medications']:
-                medications_df = pd.DataFrame(final_result['medications'])
-                st.subheader("Medications")
-                st.dataframe(medications_df, width="stretch", hide_index=True)
+                # Display medications in a separate table with custom styling
+                checks = []
+                if 'medications' in final_result and final_result['medications']:
+                    medications_df = pd.DataFrame(final_result['medications'])
+                    st.subheader("Medications")
+                    st.dataframe(medications_df, width="stretch", hide_index=True)
 
-                # Online verification against the Indian medicine database (offline, ~254k brands)
-                with st.spinner('Verifying medicines (Indian DB)...'):
-                    checks = [check_medicine_online(m.get('name', '')) for m in final_result['medications']]
-                verify_df = pd.DataFrame([{
-                    'Extracted name': c['extracted'],
-                    'Indian DB match': c['match'] or '-',
-                    'Composition': c.get('composition', '') or '-',
-                    'Manufacturer': c.get('manufacturer', '') or '-',
-                    'Pack': c.get('pack_size', '') or '-',
-                    'Type': c.get('med_type', '') or '-',
-                    'Status': c['status'],
-                } for c in checks])
-                st.subheader("Medicine Verification (Indian DB)")
-                st.dataframe(verify_df, width="stretch", hide_index=True)
-                st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
+                    # Online verification against the Indian medicine database (offline, ~254k brands)
+                    with st.spinner('Verifying medicines (Indian DB)...'):
+                        checks = [check_medicine_online(m.get('name', '')) for m in final_result['medications']]
+                    verify_df = pd.DataFrame([{
+                        'Extracted name': c['extracted'],
+                        'Indian DB match': c['match'] or '-',
+                        'Composition': c.get('composition', '') or '-',
+                        'Manufacturer': c.get('manufacturer', '') or '-',
+                        'Pack': c.get('pack_size', '') or '-',
+                        'Type': c.get('med_type', '') or '-',
+                        'Status': c['status'],
+                    } for c in checks])
+                    st.subheader("Medicine Verification (Indian DB)")
+                    st.dataframe(verify_df, width="stretch", hide_index=True)
+                    st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
 
-                # Side effects & safety: full Indian data + openFDA label info.
-                # Fast path: FDA lookups run in parallel, ONE Gemini call simplifies all.
-                st.subheader("Side Effects & Safety (Indian data + openFDA)")
-                st.warning("⚠️ Educational only — not medical advice. Always verify with a doctor or pharmacist.")
-                with st.spinner("Looking up side effects..."):
-                    from concurrent.futures import ThreadPoolExecutor
-                    with ThreadPoolExecutor(max_workers=6) as ex:
-                        safety_list = list(ex.map(
-                            lambda mc: get_drug_safety(mc[0].get("name", ""), mc[1].get("composition", "")),
-                            zip(final_result["medications"], checks),
-                        ))
-                    simple_map = simplify_all_for_patient([
-                        (m.get("name", ""), s.get("side_effects", ""))
-                        for m, s in zip(final_result["medications"], safety_list)
-                    ])
-                    for m, c, safety in zip(final_result["medications"], checks, safety_list):
-                        mname = m.get("name", "")
-                        with st.expander(f"{mname} — {safety['status']}", expanded=False):
-                            if c.get("salt_count"):
-                                st.markdown(
-                                    f"**Indian DB:** salt '{c.get('composition')}' found in "
-                                    f"{c['salt_count']} products "
-                                    f"(e.g. {c.get('salt_example') or '-'})"
-                                )
-                            else:
-                                st.markdown(
-                                    f"**Indian DB:** {c.get('match') or '-'}  \n"
-                                    f"Composition: {c.get('composition') or '-'}  \n"
-                                    f"Manufacturer: {c.get('manufacturer') or '-'}  \n"
-                                    f"Pack: {c.get('pack_size') or '-'} | Type: {c.get('med_type') or '-'}"
-                                )
-                            if safety.get("boxed_warning"):
-                                st.error(f"Boxed warning: {safety['boxed_warning']}")
-                            native_se = (c.get("side_effects_db") or "").strip()
-                            native_di = (c.get("drug_interactions_db") or "").strip()
-                            if native_se:
-                                st.markdown(f"**Side effects (Indian DB):** {native_se[:800]}")
-                            elif (simple_map.get((mname or '').lower()) or "").strip():
-                                st.markdown(f"**Common side effects:** {(simple_map.get((mname or '').lower()) or '').strip()}")
-                            elif safety.get("side_effects"):
-                                st.markdown(f"**Side effects (FDA):** {safety['side_effects'][:300]}")
-                            else:
-                                st.caption("No side-effect entry.")
-                            if c.get("medicine_desc"):
-                                with st.expander("What it is for (Indian DB)", expanded=False):
-                                    st.write(c["medicine_desc"][:1200])
-                            if native_di:
-                                with st.expander("⚠️ Drug interactions (Indian DB)", expanded=False):
-                                    st.write(native_di[:1200])
-                            if safety.get("source_url"):
-                                st.markdown(f"[Full label on DailyMed]({safety['source_url']}) · Source: {safety['source']}")
-                            st.caption(f"Prescribed: {m.get('dosage','')} | {m.get('frequency','')} | {m.get('duration','')}")
+                    # Side effects & safety: full Indian data + openFDA label info.
+                    # Fast path: FDA lookups run in parallel, ONE Gemini call simplifies all.
+                    st.subheader("Side Effects & Safety (Indian data + openFDA)")
+                    st.warning("⚠️ Educational only — not medical advice. Always verify with a doctor or pharmacist.")
+                    with st.spinner("Looking up side effects..."):
+                        from concurrent.futures import ThreadPoolExecutor
+                        with ThreadPoolExecutor(max_workers=6) as ex:
+                            safety_list = list(ex.map(
+                                lambda mc: get_drug_safety(mc[0].get("name", ""), mc[1].get("composition", "")),
+                                zip(final_result["medications"], checks),
+                            ))
+                        simple_map = simplify_all_for_patient([
+                            (m.get("name", ""), s.get("side_effects", ""))
+                            for m, s in zip(final_result["medications"], safety_list)
+                        ])
+                        for m, c, safety in zip(final_result["medications"], checks, safety_list):
+                            mname = m.get("name", "")
+                            with st.expander(f"{mname} — {safety['status']}", expanded=False):
+                                if c.get("salt_count"):
+                                    st.markdown(
+                                        f"**Indian DB:** salt '{c.get('composition')}' found in "
+                                        f"{c['salt_count']} products "
+                                        f"(e.g. {c.get('salt_example') or '-'})"
+                                    )
+                                else:
+                                    st.markdown(
+                                        f"**Indian DB:** {c.get('match') or '-'}  \n"
+                                        f"Composition: {c.get('composition') or '-'}  \n"
+                                        f"Manufacturer: {c.get('manufacturer') or '-'}  \n"
+                                        f"Pack: {c.get('pack_size') or '-'} | Type: {c.get('med_type') or '-'}"
+                                    )
+                                if safety.get("boxed_warning"):
+                                    st.error(f"Boxed warning: {safety['boxed_warning']}")
+                                native_se = (c.get("side_effects_db") or "").strip()
+                                native_di = (c.get("drug_interactions_db") or "").strip()
+                                if native_se:
+                                    st.markdown(f"**Side effects (Indian DB):** {native_se[:800]}")
+                                elif (simple_map.get((mname or '').lower()) or "").strip():
+                                    st.markdown(f"**Common side effects:** {(simple_map.get((mname or '').lower()) or '').strip()}")
+                                elif safety.get("side_effects"):
+                                    st.markdown(f"**Side effects (FDA):** {safety['side_effects'][:300]}")
+                                else:
+                                    st.caption("No side-effect entry.")
+                                if c.get("medicine_desc"):
+                                    with st.expander("What it is for (Indian DB)", expanded=False):
+                                        st.write(c["medicine_desc"][:1200])
+                                if native_di:
+                                    with st.expander("⚠️ Drug interactions (Indian DB)", expanded=False):
+                                        st.write(native_di[:1200])
+                                if safety.get("source_url"):
+                                    st.markdown(f"[Full label on DailyMed]({safety['source_url']}) · Source: {safety['source']}")
+                                st.caption(f"Prescribed: {m.get('dosage','')} | {m.get('frequency','')} | {m.get('duration','')}")
 
-            # Combination screening: one batched call over all medicines.
-            if len(final_result.get("medications", [])) >= 2:
-                st.subheader("Combination Check (drug interactions)")
-                with st.spinner("Screening combinations..."):
-                    inter = check_interactions([
-                        (m.get("name", ""),
-                         next((c.get("composition", "") for c in checks
-                               if c.get("extracted") == m.get("name", "")), ""))
-                        for m in final_result["medications"]
-                    ])
-                if inter["pairs"]:
-                    for p in inter["pairs"]:
-                        st.error(f"⚠️ {p['drugs']}: {p['detail']}")
-                else:
-                    st.success(inter["status"])
-                st.caption("AI screen over label knowledge, not a curated database. Always verify with a pharmacist.")
+                # Combination screening: one batched call over all medicines.
+                if len(final_result.get("medications", [])) >= 2:
+                    st.subheader("Combination Check (drug interactions)")
+                    with st.spinner("Screening combinations..."):
+                        inter = check_interactions([
+                            (m.get("name", ""),
+                             next((c.get("composition", "") for c in checks
+                                   if c.get("extracted") == m.get("name", "")), ""))
+                            for m in final_result["medications"]
+                        ])
+                    if inter["pairs"]:
+                        for p in inter["pairs"]:
+                            st.error(f"⚠️ {p['drugs']}: {p['detail']}")
+                    else:
+                        st.success(inter["status"])
+                    st.caption("AI screen over label knowledge, not a curated database. Always verify with a pharmacist.")
 
-            # Human-review flags: never silently fix, always surface
-            review_flags = build_review_flags(final_result, checks)
-            for flag in review_flags:
-                st.warning(f"Please review: {flag}")
-            if not review_flags:
-                st.success("All sanity checks passed - no review flags.")
-            st_status.update(label="Prescription processed — see results below",
-                             state="complete", expanded=False)
+                # Human-review flags: never silently fix, always surface
+                review_flags = build_review_flags(final_result, checks)
+                for flag in review_flags:
+                    st.warning(f"Please review: {flag}")
+                if not review_flags:
+                    st.success("All sanity checks passed - no review flags.")
+                st_status.update(label="Prescription processed — see results below",
+                                 state="complete", expanded=False)
 
-            # Glanceable summary before the details
-            verified = sum(1 for c in checks if c.get("status", "").startswith(("Verified", "Auto-corrected")))
-            m1, m2, m3 = st.columns(3)
-            m1.metric("Medicines found", len(final_result.get("medications", [])))
-            m2.metric("Verified / corrected", verified)
-            m3.metric("Review flags", len(review_flags))
+                # Glanceable summary before the details
+                verified = sum(1 for c in checks if c.get("status", "").startswith(("Verified", "Auto-corrected")))
+                m1, m2, m3 = st.columns(3)
+                m1.metric("Medicines found", len(final_result.get("medications", [])))
+                m2.metric("Verified / corrected", verified)
+                m3.metric("Review flags", len(review_flags))
 
-            # Copy to clipboard: plain-text summary + JSON. st.code gives a
-            # native copy icon; the button below is an explicit one-click copy.
-            st.subheader("Copy Results")
-            clipboard_text = format_results_for_clipboard(final_result, checks, review_flags)
-            render_copy_button(clipboard_text, button_text="Copy to Clipboard", key="rx_text")
-            st.code(clipboard_text, language="markdown")
+                # Copy to clipboard: plain-text summary + JSON. st.code gives a
+                # native copy icon; the button below is an explicit one-click copy.
+                st.subheader("Copy Results")
+                clipboard_text = format_results_for_clipboard(final_result, checks, review_flags)
+                render_copy_button(clipboard_text, button_text="Copy to Clipboard", key="rx_text")
+                st.code(clipboard_text, language="markdown")
 
-            with st.expander("JSON (for copy/paste into other tools)", expanded=False):
-                json_text = json.dumps(final_result, indent=2, default=str)
-                render_copy_button(json_text, button_text="Copy JSON", key="rx_json")
-                st.code(json_text, language="json")
+                with st.expander("JSON (for copy/paste into other tools)", expanded=False):
+                    json_text = json.dumps(final_result, indent=2, default=str)
+                    render_copy_button(json_text, button_text="Copy JSON", key="rx_json")
+                    st.code(json_text, language="json")
 
-            # Export CSV/PDF
-            st.subheader("Export")
-            import io as _io2
-            # CSV of medications
-            med_csv = pd.DataFrame(final_result.get("medications", [])).to_csv(index=False)
-            st.download_button("⬇️ Download medications CSV", med_csv, file_name=f"rx_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="dl_csv")
-            # Printable text report (for Save as PDF via browser)
-            report = clipboard_text + "\n\n---\nVerification:\n" + "\n".join(f"{c['extracted']} -> {c['match']} ({c['status']})" for c in checks)
-            st.download_button("⬇️ Download report (TXT)", report, file_name=f"rx_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="dl_txt")
-            st.caption("Tip: Print this page (Ctrl+P) → Save as PDF for a formatted report.")
+                # Export CSV/PDF
+                st.subheader("Export")
+                import io as _io2
+                # CSV of medications
+                med_csv = pd.DataFrame(final_result.get("medications", [])).to_csv(index=False)
+                st.download_button("⬇️ Download medications CSV", med_csv, file_name=f"rx_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv", mime="text/csv", key="dl_csv")
+                # Printable text report (for Save as PDF via browser)
+                report = clipboard_text + "\n\n---\nVerification:\n" + "\n".join(f"{c['extracted']} -> {c['match']} ({c['status']})" for c in checks)
+                st.download_button("⬇️ Download report (TXT)", report, file_name=f"rx_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.txt", mime="text/plain", key="dl_txt")
+                st.caption("Tip: Print this page (Ctrl+P) → Save as PDF for a formatted report.")
 
-            # Save to session history
-            st.session_state.history.insert(0, {
-                "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                "patient": final_result.get("patient_name", ""),
-                "meds": len(final_result.get("medications", [])),
-                "raw": final_result,
-            })
-            st.session_state.history = st.session_state.history[:20]
+                # Save to session history
+                st.session_state.history.insert(0, {
+                    "ts": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "patient": final_result.get("patient_name", ""),
+                    "meds": len(final_result.get("medications", [])),
+                    "raw": final_result,
+                })
+                st.session_state.history = st.session_state.history[:20]
 
-        # Delete temp folder
-        remove_temp_folder(output_folder)
+            # Delete temp folder
+            remove_temp_folder(output_folder)
 
     with tab_hist:
         st.subheader("📜 History (this session)")
