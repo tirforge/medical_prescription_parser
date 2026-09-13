@@ -183,6 +183,7 @@ async def parse(files: List[UploadFile] = File(...)):
         for m in res.get("medications", []):
             m["frequency"] = normalize_frequency(m.get("frequency", ""))
         res["medications"] = dedupe_medications(res.get("medications"))
+        # second-pass is already inside get_prescription_informations
         checks = []
         for m in res.get("medications", []):
             chk = verify_medicine(m.get("name", ""))
@@ -205,6 +206,12 @@ async def parse(files: List[UploadFile] = File(...)):
             except Exception:
                 pass
             checks.append(chk)
+        # confidence per field (high/medium/low) for UI
+        try:
+            from prescription import _add_confidence
+            res = _add_confidence(res, checks)
+        except Exception:
+            pass
         return {"result": res, "verification": checks}
     finally:
         shutil.rmtree(tmpdir, ignore_errors=True)

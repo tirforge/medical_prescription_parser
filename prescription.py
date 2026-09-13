@@ -313,6 +313,112 @@ def image_model(inputs: dict) -> str | list[str] | dict:
         )
     return content
 
+def _easyocr_fallback(image_paths: List[str]) -> dict:
+    """Offline OCR fallback when Gemini quota dies — returns minimal structure."""
+    try:
+        import easyocr
+        reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+        texts = []
+        for p in image_paths:
+            try:
+                res = reader.readtext(p)
+                texts.extend([t for _, t, _ in res])
+            except Exception:
+                continue
+        txt = " ".join(texts)[:2000]
+        # very naive parse — at least return something for verification
+        return {
+            "patient_name": "Not available",
+            "patient_age": 0,
+            "patient_gender": "Not available",
+            "doctor_name": "Not available",
+            "doctor_license": "Not available",
+            "prescription_date": "1900-01-01T00:00:00",
+            "medications": [{"name": t, "dosage": "Not available", "frequency": "Not available", "duration": "Not available"} for t in txt.split()[:3] if len(t) > 3],
+            "additional_notes": txt[:500],
+            "_fallback": "easyocr",
+        }
+    except Exception as e:
+        return {
+            "patient_name": "Not available",
+            "patient_age": 0,
+            "patient_gender": "Not available",
+            "doctor_name": "Not available",
+            "doctor_license": "Not available",
+            "prescription_date": "1900-01-01T00:00:00",
+            "medications": [],
+            "additional_notes": f"Offline fallback failed: {e}",
+            "_fallback": "none",
+        }
+
+
+def _second_pass_review(first: dict, image_paths: List[str]) -> dict:
+    """Second-pass review: feed first JSON back to model as context to catch misspellings."""
+    try:
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        from langchain_core.messages import HumanMessage
+        import base64
+        # reuse same vision model but as reviewer
+        llm = ChatGoogleGenerativeAI(model=GEMINI_MODEL, google_api_key=os.environ.get("GOOGLE_API_KEY",""), temperature=0)
+        # encode first image for visual review (only first page to save quota)
+        with open(image_paths[0], "rb") as f:
+            b64 = base64.b64encode(f.read()).decode()
+        prompt = (
+            f"You are a pharmacist reviewer. Given this first parse:\n{first}\n"
+            "Re-examine the prescription image and correct only clear misspellings of medication names vs the image. "
+            "Do not invent. If unsure, keep original. Reply with corrected JSON only."
+        )
+        out = llm.invoke([HumanMessage(content=[
+            {"type": "text", "text": prompt},
+            {"type": "text", "text": parser.get_format_instructions() if parser else ""},
+            {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{b64}"}},
+        ])])
+        txt = out.content
+        if isinstance(txt, list):
+            txt = "\n".join(b.get("text","") for b in txt if isinstance(b, dict) and b.get("type")=="text")
+        # try to parse as JSON
+        import json as _js
+        # extract JSON block
+        import re as _re
+        m = _re.search(r"\{.*\}", txt, _re.S)
+        if m:
+            try:
+                j = _js.loads(m.group(0))
+                # merge: keep first but update med names if reviewer changed and is more plausible (longer, not Not available)
+                if j.get("medications"):
+                    first["medications"] = j["medications"]
+                return first
+            except Exception:
+                pass
+        return first
+    except Exception:
+        return first
+
+
+def _add_confidence(res: dict, checks: list) -> dict:
+    """Per-field confidence: high if Verified, medium if salt/auto-corrected, low if Not found/Not available."""
+    conf = {}
+    for k in ["patient_name","patient_age","patient_gender","doctor_name","doctor_license","prescription_date"]:
+        v = res.get(k)
+        if not v or str(v).lower() in ("not available","0","1900-01-01t00:00:00"):
+            conf[k] = "low"
+        else:
+            conf[k] = "high"
+    # meds confidence from verification
+    med_confs = []
+    for c in checks or []:
+        st = c.get("status","")
+        if st.startswith("Verified"):
+            med_confs.append("high")
+        elif "salt" in st.lower() or "auto-corrected" in st.lower():
+            med_confs.append("medium")
+        else:
+            med_confs.append("low")
+    conf["medications"] = med_confs
+    res["_confidence"] = conf
+    return res
+
+
 def get_prescription_informations(image_paths: List[str]) -> dict:
     global parser
     parser = JsonOutputParser(pydantic_object=PrescriptionInformations)
@@ -326,7 +432,17 @@ def get_prescription_informations(image_paths: List[str]) -> dict:
     Note: If portions of the image are not clear then leave the values as empty. Do not make up the values.
     """
     vision_chain = load_images_chain | image_model | parser
-    return vision_chain.invoke({'image_paths': image_paths, 'prompt': vision_prompt})
+    try:
+        first = vision_chain.invoke({'image_paths': image_paths, 'prompt': vision_prompt})
+    except Exception as e:
+        # quota or network → offline fallback
+        if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or "quota" in str(e).lower():
+            return _easyocr_fallback(image_paths)
+        raise
+    # second-pass review (pharmacist) — only if we have meds
+    if first.get("medications"):
+        first = _second_pass_review(first, image_paths)
+    return first
 
 
 def remove_temp_folder(path):

@@ -25,3 +25,4 @@ Check_*/
 test-results/
 playwright-report/
 playwright/.cache/
+eval_results.json
