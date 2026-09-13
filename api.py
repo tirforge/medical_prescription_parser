@@ -84,6 +84,9 @@ async def chat(body: dict):
         return {"answer": ans}
     except Exception as e:
         raise HTTPException(status_code=502, detail=f"Chat failed: {e}")
+
+
+@app.post("/parse")
 async def parse(files: List[UploadFile] = File(...)):
     try:
         from prescription import (
