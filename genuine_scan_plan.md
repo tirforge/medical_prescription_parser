@@ -1,6 +1,13 @@
 # Genuine vs Fake Medicine Scanner — Proposal (ask before building)
 
-Date: 2026-09-13. Nothing below is implemented yet — approve first.
+Date: 2026-09-13. NOTHING BELOW IS IMPLEMENTED YET — APPROVE FIRST.
+
+> **BUILD STATUS 2026-09-13**: approved with "clone medtrack + add RxNorm".
+> Decided during build: medtrack's blockchain approach needs a manufacturer
+> ecosystem, so the scanner was built ourselves per this plan instead of
+> cloning (no repo was cloned). `rxnorm.py` (world-registry + genuineness
+> scoring), Scan Medicine section, and combination screening are LIVE.
+> CDSCO has no check API — QR/NSQ guide links used instead.
 
 ## 1. What the top repos do
 

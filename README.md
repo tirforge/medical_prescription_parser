@@ -1,131 +1,86 @@
-# Medical Prescription Parsing Application
+# Medical Prescription Parsing 🏥
 
-This repository contains a demo application designed to parse and extract information from handwritten medical prescriptions. The application leverages the GPT-4o model from OpenAI to accurately transcribe prescription details into structured data.
+Upload a handwritten prescription photo → structured data (patient, doctor,
+medicines) + Indian registry verification + side effects + interaction screen.
+Built with Streamlit and free-tier vision models (Gemini / Gemma 4).
 
-**Dataset**: [Kaggle Dataset](https://www.kaggle.com/datasets/mehaksingal/illegible-medical-prescription-images-dataset)
- 
-## Table of Contents
-
-1. [Introduction](#introduction)
-2. [Features](#features)
-3. [Prerequisites](#prerequisites)
-4. [Setup Instructions](#setup-instructions)
-5. [Running the Application](#running-the-application)
-6. [Code Explanation](#code-explanation)
-7. [Use Case](#use-case)
-8. [Benefits](#benefits)
-9. [Potential Issues](#potential-issues)
-10. [Conclusion](#conclusion)
-
-## Introduction
-
-This project aims to streamline the process of reading and organizing handwritten medical prescriptions. By using the GPT-4o model, the application can decipher difficult handwriting and convert the information into a structured format, including patient details, doctor information, medications, and additional notes.
+**Dataset for testing**: [Illegible Medical Prescription Images (Kaggle)](https://www.kaggle.com/datasets/mehaksingal/illegible-medical-prescription-images-dataset)
+(see `accuracy_test/` for bundled samples).
 
 ## Features
 
-- Accurately transcribes handwritten medical prescriptions.
-- Extracts and organizes patient and doctor information.
-- Lists medications with dosage, frequency, and duration.
-- Provides additional notes and instructions in a readable format.
-- User-friendly web interface built with Streamlit.
+- 📄 **Prescription parsing** — multi-page upload, clipboard paste, or strip photo;
+  preocr denoise/deskew runs locally before the vision model reads it
+- 🔍 **Scan a Medicine** — type a name or snap a strip for genuine-check signals
+  + full data card (composition, manufacturer, pack, side effects)
+- ✅ **Indian DB verification** — ~254k brands offline, fuzzy auto-correct,
+  salt matching, pack/type details, human-review flags
+- 💊 **Side effects + interactions** — openFDA labels in plain English,
+  boxed warnings, DailyMed links, one-shot combination screening
+- 🌍 **World-registry cross-check** — NIH RxNorm (free, keyless)
+- 📋 **Copy results** — one-click text + JSON export
+- 🎨 Medical theme (light + dark), sidebar model picker, metrics + staged progress
 
-## Prerequisites
+## Vision models & free quotas (verified 2026-09-13, reset midnight PT)
 
-Before setting up and running the application, ensure you have the following installed:
+| Model (default first) | Req/day |
+|---|---|
+| `gemini-3.5-flash-lite` | 500 |
+| `gemma-4-26b-a4b-it` / `gemma-4-31b-it` | 14,400 |
+| `gemini-2.5-flash(-lite)` | 20 |
 
-- Python 3.8 or higher
-- OpenAI API Key
-- Necessary Python libraries (listed in `requirements.txt`)
+Switch via sidebar, or `GEMINI_MODEL` env var.
 
-## Setup Instructions
+## Setup
 
-Follow these steps to set up the development environment and run the application:
-
-1. **Clone the Repository**:
-    ```bash
-    git clone https://github.com/mohtasham9/medical_prescription_parser.git
-    cd medical_prescription_parser
-    ```
-
-2. **Create a Virtual Environment**:
-    ```bash
-    python -m venv venv
-    source venv/bin/activate    # On Windows, use `venv\Scripts\activate`
-    ```
-
-3. **Install Dependencies**:
-    ```bash
-    pip install -r requirements.txt
-    ```
-
-4. **Set Up Environment Variables**:
-    Create a `keys.py` file in the root directory and add your OpenAI API key:
-    ```env
-    OPENAI_API_KEY=your_openai_api_key
-    ```
-
-5. **Add Stylesheet**:
-    Ensure you have a `styles.css` file in the root directory with your custom styles for the Streamlit app.
-
-## Running the Application
-
-To run the application, use the following command:
 ```bash
-streamlit run app.py
+git clone <this-repo> && cd medical_prescription_parser
+pip install -r requirements.txt   # pinned, tested set
 ```
 
-Open your web browser and go to `http://localhost:8501` to access the application. You can upload prescription images and see the extracted information displayed on the web interface.
+API key — any ONE of these (first found wins: sidebar → `keys.py` → `.env` → env):
 
-## Code Explanation
+```bash
+cp keys.example.py keys.py   # then set GOOGLE_API_KEY inside
+# free key: https://aistudio.google.com/app/apikey
+```
 
-### Imports and Environment Setup
+## Run
 
-- Import necessary libraries and set environment variables.
-- Use `os.environ` to securely manage the OpenAI API key.
+```bash
+streamlit run prescription.py   # → http://localhost:8501
+```
 
-### Load CSS for Streamlit
+Expose publicly (Cloudflare quick tunnel):
 
-- Define a function to load and apply custom CSS styles from a `styles.css` file.
+```bash
+cloudflared tunnel --url http://localhost:8501
+```
 
-### Define Data Models
+Streamlit Community Cloud: set `GOOGLE_API_KEY` under App → Settings → Secrets.
 
-- Use Pydantic models (`MedicationItem` and `PrescriptionInformations`) to structure and validate extracted data.
+## Project structure
 
-### Load and Encode Images
+| File | What |
+|---|---|
+| `prescription.py` | Streamlit app: parse, scan, verify, safety UI |
+| `indian_db.py` | Offline Indian medicine verification (CSV-backed) |
+| `drug_info.py` | openFDA side effects, plain-English simplify, interaction screen |
+| `rxnorm.py` | NIH RxNorm registry check + genuineness scoring |
+| `indian_medicine_db.csv` | 254k-brand Indian dataset (offline) |
+| `accuracy_test/` | Sample prescriptions + ground truth |
+| `todo.md` / `ui_plan.md` / `genuine_scan_plan.md` | Roadmaps & research notes |
 
-- Define `load_images` function to read and encode images as base64.
-- Set up `TransformChain` to handle image path transformations.
+## Data sources
 
-### Process and Extract Information
+- Indian Medicine Dataset (open, ~254k brands) — offline verification
+- openFDA drug labels — side effects/warnings (US labels; India-local brands may miss)
+- NIH RxNorm — world-registry presence (monthly releases)
 
-- Define `image_model` function to interact with GPT-4o for extracting prescription details.
-- Use a detailed prompt to guide the AI in transcribing information accurately.
-- Combine chains and parsers in `get_prescription_informations` function to process images and return structured data.
+## ⚠️ Disclaimer
 
-### Streamlit App Logic
-
-- Initialize session state and set up file uploader for prescription images.
-- Process uploaded images, display results in a formatted table, and clean up temporary files.
-
-## Use Case
-
-This application is particularly useful in healthcare settings where managing handwritten prescriptions can be challenging. It automates the transcription process, ensuring greater accuracy and efficiency, and can be integrated into existing healthcare systems for better workflow management.
-
-## Benefits
-
-- **Accuracy**: Reduces errors in transcription.
-- **Efficiency**: Saves time for healthcare providers.
-- **Integration**: Easily integrates with existing systems for a seamless workflow.
-
-## Potential Issues
-
-- **Image Quality**: Poor quality images may affect accuracy.
-- **Handwriting Variability**: Highly illegible handwriting can be challenging for the AI.
-- **API Limits**: Ensure you have sufficient quota for OpenAI API calls.
-
-## Conclusion
-
-This demo application demonstrates the potential of GPT-4o in revolutionizing healthcare practices by automating the transcription of handwritten prescriptions. With a straightforward setup and significant benefits, it is a valuable tool for improving accuracy and efficiency in healthcare management.
-
-
-
+Educational tool only — **not medical advice**. Registry checks catch
+misspellings and fictitious makers but cannot prove a strip is genuine; only
+the manufacturer's QR/serialization check can. Always verify with a doctor or
+pharmacist. Free-tier APIs may retain data — real patient data belongs on a
+paid tier.

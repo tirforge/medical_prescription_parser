@@ -143,6 +143,63 @@ def get_drug_safety(name: str, composition: str = "") -> dict:
 
 
 @st.cache_data(ttl=7 * 86400, show_spinner=False)
+def check_interactions(items: list) -> dict:
+    """Screen ALL drugs together in ONE Gemini call (fast + quota-friendly).
+    items: [(name, composition)]. Returns {pairs: [{drugs, detail}], status}.
+    AI-screened from label knowledge — NOT a substitute for a pharmacist or a
+    curated interaction database. Returns {}-safe empty result on failure."""
+    clean = [(n, c) for n, c in items if n]
+    if len(clean) < 2:
+        return {"pairs": [], "status": "Need 2+ medicines to check combinations"}
+    try:
+        import os
+        from langchain_google_genai import ChatGoogleGenerativeAI
+        key = os.environ.get("GOOGLE_API_KEY", "")
+        if not key:
+            return {"pairs": [], "status": "No API key — cannot screen combinations"}
+        llm = ChatGoogleGenerativeAI(
+            model=os.environ.get("GEMINI_MODEL", "gemini-3.5-flash-lite"),
+            google_api_key=key,
+            temperature=0,
+        )
+        listed = "\n".join(f"{i + 1}. {n} ({c or 'composition unknown'})"
+                           for i, (n, c) in enumerate(clean))
+        prompt = (
+            "You screen drug combinations for safety. Given these medicines, list "
+            "ONLY well-established, clinically significant drug-drug interactions "
+            "between them. Reply with exactly one line per interacting PAIR in this "
+            "format: DrugA + DrugB: one plain-English sentence on the risk and what "
+            "to watch for. Only include pairs with real known interactions — never "
+            "invent. If no significant interactions are known, reply with exactly: "
+            "NONE\n\nMedicines:\n" + listed
+        )
+        raw = llm.invoke(prompt).content or ""
+        if isinstance(raw, list):
+            raw = " ".join(
+                b.get("text", "") for b in raw
+                if isinstance(b, dict) and b.get("type") == "text"
+            )
+        pairs = []
+        for line in str(raw).splitlines():
+            line = re.sub(r"^\s*\d+[.)]\s*", "", line).strip().strip("-•* ").strip()
+            if not line or line.strip().upper() == "NONE":
+                continue
+            if ":" not in line:
+                continue
+            drugs, detail = line.split(":", 1)
+            drugs, detail = drugs.strip(), detail.strip()
+            if drugs and detail and "+" in drugs:
+                pairs.append({"drugs": drugs, "detail": detail[:400]})
+        if not pairs:
+            return {"pairs": [],
+                    "status": "No significant known interactions flagged (AI screen — verify with pharmacist)"}
+        return {"pairs": pairs,
+                "status": f"{len(pairs)} potential interaction(s) flagged — verify with pharmacist"}
+    except Exception:
+        return {"pairs": [], "status": "Screening failed — verify with pharmacist"}
+
+
+@st.cache_data(ttl=7 * 86400, show_spinner=False)
 def simplify_all_for_patient(items: list) -> dict:
     """One Gemini call for ALL drugs (fast + quota-friendly).
     Returns {drug_name: 'effect1, effect2, effect3'} short plain-English lines.

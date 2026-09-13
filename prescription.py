@@ -12,6 +12,11 @@ from pydantic import BaseModel, Field
 import glob
 import re
 try:
+    from dotenv import load_dotenv
+    load_dotenv()  # allow GOOGLE_API_KEY / GEMINI_MODEL from a .env file
+except ImportError:
+    pass
+try:
     from keys import GOOGLE_API_KEY
 except ImportError:
     GOOGLE_API_KEY = ""
@@ -34,7 +39,28 @@ except ImportError:
     paste_image_button = None
     HAS_PASTE = False
 from indian_db import verify_medicine as check_medicine_online
-from drug_info import get_drug_safety, simplify_all_for_patient
+from drug_info import get_drug_safety, simplify_all_for_patient, check_interactions
+from rxnorm import rxnorm_lookup, score_genuineness
+
+
+def read_brand_from_strip(data: bytes) -> str:
+    """Read the brand name off a medicine strip/box photo (1 Gemini call)."""
+    from langchain_google_genai import ChatGoogleGenerativeAI
+    from langchain_core.messages import HumanMessage
+    b64 = base64.b64encode(data).decode()
+    llm = ChatGoogleGenerativeAI(
+        model=GEMINI_MODEL,
+        google_api_key=os.environ.get("GOOGLE_API_KEY", ""),
+        temperature=0,
+    )
+    out = llm.invoke([HumanMessage(content=[
+        {"type": "text", "text": "What is the brand/product name printed on this medicine strip or box? Reply with ONLY the name, nothing else."},
+        {"type": "image_url", "image_url": {"url": "data:image/jpeg;base64," + b64}},
+    ])])
+    c = out.content
+    if isinstance(c, list):
+        c = " ".join(b.get("text", "") for b in c if isinstance(b, dict) and b.get("type") == "text")
+    return (c or "").strip().strip('"').strip()[:80]
 
 os.environ["GOOGLE_API_KEY"] = GOOGLE_API_KEY or os.environ.get("GOOGLE_API_KEY", "")
 # Vision models: free-tier quotas verified 2026-09-13 (RPD = req/day, resets midnight PT):
@@ -53,7 +79,9 @@ GEMINI_MODEL = os.environ.get("GEMINI_MODEL", MODEL_CHOICES[0])
 set_debug(False)
 
 parser = None
-st.set_page_config(layout="wide")
+st.set_page_config(page_title="Rx Parser — Prescription & Medicine Safety",
+                   page_icon="🏥", layout="wide",
+                   menu_items={"About": "Medical Prescription Parsing: Gemini/Gemma vision → structured data + Indian DB verify + side effects. Educational only — not medical advice."})
 
 # load css file
 def local_css(file_name):
@@ -210,6 +238,35 @@ def remove_temp_folder(path):
         os.remove(path)  # remove the file
     elif os.path.isdir(path):
         shutil.rmtree(path)  # remove dir and all contains
+
+
+def sweep_stale_outputs(max_age_hours: int = 2):
+    """Delete leftover Check_* folders from crashed/quota-killed runs.
+    The success path already cleans up; this catches everything else."""
+    import time
+    now = time.time()
+    for d in glob.glob("Check_*"):
+        try:
+            if os.path.isdir(d) and (now - os.path.getmtime(d)) > max_age_hours * 3600:
+                shutil.rmtree(d, ignore_errors=True)
+        except OSError:
+            pass
+
+
+def dedupe_medications(meds: list) -> list:
+    """Merge duplicate rows (same name+dosage+frequency), keeping the most
+    informative duration instead of listing a drug twice."""
+    seen: dict = {}
+    for m in meds or []:
+        key = ((m.get("name") or "").strip().lower(),
+               (m.get("dosage") or "").strip(),
+               (m.get("frequency") or "").strip())
+        dur = (m.get("duration") or "").strip()
+        if key not in seen:
+            seen[key] = dict(m)
+        elif dur and seen[key].get("duration") in ("", "Not available"):
+            seen[key]["duration"] = m.get("duration")
+    return list(seen.values())
 
 # Initialize session state
 session_state = st.session_state
@@ -376,15 +433,84 @@ def enhance_with_preocr(src_path: str, dst_path: str, mode: str = "quality") -> 
 
 def main():
     st.title('Medical Prescription Parsing')
-    global parser
+    sweep_stale_outputs()
+    global parser, GEMINI_MODEL
     parser = JsonOutputParser(pydantic_object=PrescriptionInformations)
+
+    with st.sidebar:
+        st.header("🏥 Settings")
+        try:
+            default_idx = MODEL_CHOICES.index(GEMINI_MODEL)
+        except ValueError:
+            default_idx = 0
+        GEMINI_MODEL = st.selectbox("Vision model", MODEL_CHOICES, index=default_idx,
+                                    help="Gemma 4 = huge free quota. Lite = fastest.")
+        key_in = st.text_input("Google API key", type="password",
+                               help="Optional if keys.py or .env already has it.")
+        if key_in and key_in.strip():
+            os.environ["GOOGLE_API_KEY"] = key_in.strip()
+        st.divider()
+        st.caption("⚠️ Educational only — not medical advice. Free-tier APIs may retain data; real patient data belongs on a paid tier.")
     #st.header('Prescription Processing')
+    with st.expander("🔍 Scan a Medicine — genuine check + full data", expanded=False):
+        st.caption("Type a name or snap the strip. Checks Indian registry + world registry (RxNorm) + side effects.")
+        st.warning("Registry checks catch wrong spellings and fictitious makers, but only the manufacturer's QR on YOUR pack proves genuineness.")
+        scan_name = st.text_input("Medicine name", placeholder="e.g. Dolo 650", key="scan_name")
+        scan_photo = st.file_uploader("Or photo of the strip/box", type=["png", "jpg", "jpeg"], key="scan_photo")
+        if st.button("🔍 Scan Medicine", key="scan_go"):
+            name = (scan_name or "").strip()
+            if scan_photo is not None and not name:
+                with st.spinner("Reading strip..."):
+                    try:
+                        name = read_brand_from_strip(scan_photo.getvalue())
+                        if name:
+                            st.info(f"Read from strip: {name}")
+                    except Exception as e:
+                        st.error(f"Could not read strip: {e}")
+            if not name:
+                st.warning("Enter a name or upload a strip photo.")
+            else:
+                with st.spinner("Checking registries..."):
+                    from concurrent.futures import ThreadPoolExecutor
+                    check = check_medicine_online(name)
+                    tokens = [t for t in re.split(r"[^a-zA-Z]+", check.get("composition", "")) if len(t) >= 4]
+                    rx = {"rxcui": "", "status": "Not checked"}
+                    for cand in tokens[:2] + [name]:
+                        rx = rxnorm_lookup(cand)
+                        if rx.get("rxcui"):
+                            break
+                    safety = get_drug_safety(name, check.get("composition", ""))
+                    simple = simplify_all_for_patient([(name, safety.get("side_effects", ""))])
+                    sig = score_genuineness(check, rx)
+                if sig["score"] >= 4:
+                    st.success(f"✅ {sig['verdict']} ({sig['score']}/{sig['max_score']})")
+                elif sig["score"] >= 2:
+                    st.warning(f"⚠️ {sig['verdict']} ({sig['score']}/{sig['max_score']})")
+                else:
+                    st.error(f"🛑 {sig['verdict']} ({sig['score']}/{sig['max_score']})")
+                for ok, text in sig["signals"]:
+                    icon = "✅" if ok is True else ("⚠️" if ok is None else "❌")
+                    st.markdown(f"{icon} {text}")
+                st.markdown(
+                    f"**Composition:** {check.get('composition') or '-'}  \n"
+                    f"**Manufacturer:** {check.get('manufacturer') or '-'}  \n"
+                    f"**Pack:** {check.get('pack_size') or '-'} | **Type:** {check.get('med_type') or '-'}  \n"
+                    f"**RxNorm:** {rx.get('matched_name') or rx.get('status')}  \n"
+                    f"**Common side effects:** {simple.get(name.lower(), '') or safety.get('side_effects', '')[:250] or 'No FDA entry — verify with pharmacist.'}"
+                )
+                if safety.get("source_url"):
+                    st.markdown(f"[Full label on DailyMed]({safety['source_url']})")
+                st.markdown(
+                    "**Final proof:** scan the QR/barcode on YOUR pack with your phone — "
+                    "it must show this manufacturer. "
+                    "[CDSCO spurious-drug guidance](https://cdsco.gov.in/opencms/opencms/en/consumer/Guidelines-for-Spurious-Drugs)"
+                )
+
     uploaded_files = st.file_uploader(
         "Upload Prescription image(s) — multi-page supported",
         type=["png", "jpg", "jpeg"],
         accept_multiple_files=True,
     )
-
     pasted_image = None
     with st.expander("📋 Or paste an image from clipboard", expanded=False):
         if HAS_PASTE:
@@ -443,8 +569,11 @@ def main():
         with st.expander(f"Prescription Images ({len(saved_paths)})", expanded=False):
             st.image(saved_paths, caption=[os.path.basename(p) for p in saved_paths], width="stretch")
 
-        with st.spinner('Processing Prescription...'):
-            final_result = get_prescription_informations(model_paths)           
+        with st.status("Processing prescription...", expanded=True) as st_status:
+            st_status.write("🔍 Reading handwriting with vision model...")
+            final_result = get_prescription_informations(model_paths)
+            final_result["medications"] = dedupe_medications(final_result.get("medications"))
+            st_status.write("✅ Reading done — verifying medicines...")           
             # Process and display results
             if 'additional_notes' in final_result:
                 additional_notes = final_result['additional_notes']
@@ -469,19 +598,20 @@ def main():
             #     st.table(medications_df)
 
 
-            # Convert final_result to a list of tuples for DataFrame creation
-            data = [(key, final_result[key]) for key in final_result if key != 'medications']
+            # Convert final_result to a list of tuples for display
+            data = [(key, _strip_html(final_result[key]) if key == "additional_notes" else final_result[key])
+                    for key in final_result if key != 'medications']
             df = pd.DataFrame(data, columns=["Field", "Value"])
 
-            # Display the DataFrame with custom styling
-            st.write(df.to_html(classes='custom-table', index=False, escape=False), unsafe_allow_html=True)
+            # Theme-aware tables (readable in light + dark mode)
+            st.dataframe(df, width="stretch", hide_index=True)
 
             # Display medications in a separate table with custom styling
             checks = []
             if 'medications' in final_result and final_result['medications']:
                 medications_df = pd.DataFrame(final_result['medications'])
                 st.subheader("Medications")
-                st.write(medications_df.to_html(classes='custom-table', index=False, escape=False), unsafe_allow_html=True)
+                st.dataframe(medications_df, width="stretch", hide_index=True)
 
                 # Online verification against the Indian medicine database (offline, ~254k brands)
                 with st.spinner('Verifying medicines (Indian DB)...'):
@@ -496,7 +626,7 @@ def main():
                     'Status': c['status'],
                 } for c in checks])
                 st.subheader("Medicine Verification (Indian DB)")
-                st.write(verify_df.to_html(classes='custom-table', index=False, escape=False), unsafe_allow_html=True)
+                st.dataframe(verify_df, width="stretch", hide_index=True)
                 st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
 
                 # Side effects & safety: full Indian data + openFDA label info.
@@ -543,12 +673,38 @@ def main():
                                 st.markdown(f"[Full label on DailyMed]({safety['source_url']}) · Source: {safety['source']}")
                             st.caption(f"Prescribed: {m.get('dosage','')} | {m.get('frequency','')} | {m.get('duration','')}")
 
+            # Combination screening: one batched call over all medicines.
+            if len(final_result.get("medications", [])) >= 2:
+                st.subheader("Combination Check (drug interactions)")
+                with st.spinner("Screening combinations..."):
+                    inter = check_interactions([
+                        (m.get("name", ""),
+                         next((c.get("composition", "") for c in checks
+                               if c.get("extracted") == m.get("name", "")), ""))
+                        for m in final_result["medications"]
+                    ])
+                if inter["pairs"]:
+                    for p in inter["pairs"]:
+                        st.error(f"⚠️ {p['drugs']}: {p['detail']}")
+                else:
+                    st.success(inter["status"])
+                st.caption("AI screen over label knowledge, not a curated database. Always verify with a pharmacist.")
+
             # Human-review flags: never silently fix, always surface
             review_flags = build_review_flags(final_result, checks)
             for flag in review_flags:
                 st.warning(f"Please review: {flag}")
             if not review_flags:
                 st.success("All sanity checks passed - no review flags.")
+            st_status.update(label="Prescription processed — see results below",
+                             state="complete", expanded=False)
+
+            # Glanceable summary before the details
+            verified = sum(1 for c in checks if c.get("status", "").startswith(("Verified", "Auto-corrected")))
+            m1, m2, m3 = st.columns(3)
+            m1.metric("Medicines found", len(final_result.get("medications", [])))
+            m2.metric("Verified / corrected", verified)
+            m3.metric("Review flags", len(review_flags))
 
             # Copy to clipboard: plain-text summary + JSON. st.code gives a
             # native copy icon; the button below is an explicit one-click copy.

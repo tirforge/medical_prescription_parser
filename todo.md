@@ -17,23 +17,19 @@ Legend: effort S < 1h · M = few hours · L = day+.
 
 ## P0 — Bugs (fix first)
 
-- [ ] **Temp-folder leak**: 30+ `Check_*` folders pile up. `remove_temp_folder`
-      runs only on success — quota/API errors skip cleanup. Wrap in
-      try/finally. (found in own audit) · S
-- [ ] **Pin requirements**: unpinned deps already crashed us once
-      (numpy 2 vs pandas). `pip freeze` the working set. (own audit) · S
-- [ ] **Dedupe medications**: real parse listed Ultracal-D twice with conflicting
-      durations. Merge identical name+dosage+frequency rows, flag conflicts.
-      (own audit) · S
+- [x] **Temp-folder leak**: `sweep_stale_outputs()` at startup + success-path
+      removal (try/finally impractical without re-indenting `main`). DONE 2026-09-13.
+- [x] **Pin requirements**: pinned working set 2026-09-13. DONE.
+- [x] **Dedupe medications**: `dedupe_medications()` merges same
+      name+dosage+frequency, keeps informative duration. DONE 2026-09-13.
 
 ## P1 — Clinical safety (the core gap vs medsafe-ai, DrugScan, RxCheck)
 
-- [ ] **Drug-drug interaction check**: we show side effects per drug but never
-      flag combinations (e.g. Tramadol + others). Two sources available:
-      (a) `drug_interactions` column in the 45MB updated Indian CSV (offline,
-      India-local brands), (b) one batched Gemini call over all meds with
-      DailyMed/openFDA grounding. Show severity-ordered list with red flags.
-      (DrugScan, medsafe-ai `interaction_checker.py`, RxCheck) · M
+- [x] **Drug-drug interaction check**: batched one-call Gemini screen
+      (`drug_info.check_interactions`) over all meds, severity-ordered red
+      flags. NOTE: RxNav's public interaction feed is retired (verified
+      2026-09-13), so this is AI-screened + pharmacist disclaimer, not
+      curated DB. DONE 2026-09-13.
 - [ ] **Upgrade to the 45MB updated Indian dataset**: native `side_effects`,
       `drug_interactions`, `medicine_desc`, `salt_composition` columns. Covers
       India-local brands where openFDA returns nothing. Keep current CSV as
@@ -50,10 +46,10 @@ Legend: effort S < 1h · M = few hours · L = day+.
 
 ## P2 — Product / UX (vs medscan-lens, medsafe-ai, MediParse)
 
-- [ ] **Rewrite README**: still says GPT-4o/OpenAI/`app.py`. Document Gemini+
-      Gemma 4, keys setup, features, tunnel/Cloud deploy. (all repos) · S
-- [ ] **Build the sidebar**: about text, model picker (comment promises it but
-      it doesn't exist), enhance toggle, disclaimer. (medscan-lens) · S
+- [x] **Rewrite README**: documents Gemini/Gemma 4, quotas, setup, structure,
+      disclaimer. DONE 2026-09-13.
+- [x] **Build the sidebar**: model picker, API-key input, about, disclaimer.
+      DONE 2026-09-13.
 - [ ] **Tabbed layout**: separate "Prescription Analyzer" vs "Single Drug
       Scanner" tabs like medscan-lens (single-drug tab = fast safety lookup
       without full parse). · M
@@ -65,11 +61,9 @@ Legend: effort S < 1h · M = few hours · L = day+.
       pages; need pdf→image step). (`csotherden`, MediParse) · M
 - [ ] **Before/after enhance preview**: side-by-side original vs
       preocr-enhanced image. (neonwatty pattern) · S
-- [ ] **Load `.env` + Streamlit secrets**: `python-dotenv` is installed but
-      never `load_dotenv()`; no `.streamlit/secrets.toml` support for Cloud
-      deploy. (medscan-lens) · S
-- [ ] **Sidebar key input**: paste API key in UI instead of editing `keys.py`.
-      (medscan-lens) · S
+- [x] **Load `.env` + Streamlit secrets**: `load_dotenv()` wired; sidebar key
+      input added; `.streamlit/config.toml` theme added. DONE 2026-09-13.
+- [x] **Sidebar key input**: password field → env. DONE 2026-09-13.
 - [ ] **Result history**: persist past parses (SQLite like MediParse, or
       MongoDB like Analyzer) with re-view. · M
 - [ ] **Confidence per field**: show low-confidence extractions highlighted

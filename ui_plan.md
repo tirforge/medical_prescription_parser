@@ -17,23 +17,14 @@ Kitrum, HTD, Aufait). Nothing below is implemented yet.
 
 ## Phase 1 — Quick wins, Streamlit-native (no CSS hacks)
 
-- [ ] **`.streamlit/config.toml` medical theme**: calm teal/blue primary,
-      custom `[theme.light]` + `[theme.dark]` so both modes look designed
-      (Streamlit docs: per-theme colors, radius, fonts). Fixes the table
-      problem properly instead of hardcoded HTML colors.
-- [ ] **Page identity**: `st.set_page_config` title/icon/about menu
-      (🏥 + "About this app" with disclaimer + data-use transparency —
-      healthcare UX rule: trust through transparency).
-- [ ] **Sidebar**: about, model picker, API-key input, enhance toggle,
-      disclaimer. (medscan-lens pattern)
+- [x] **`.streamlit/config.toml` medical theme** (teal, custom light+dark).
+      DONE 2026-09-13.
+- [x] **Page identity** (title/icon/about menu). DONE 2026-09-13.
+- [x] **Sidebar** (model picker, key input, about, disclaimer). DONE 2026-09-13.
 - [ ] **Tabs**: `🔍 Scan Medicine | 📄 Prescription | 📜 History` instead of
-      one endless scroll. (medscan-lens pattern)
-- [ ] **Progress feedback**: `st.status`/`st.progress` with stages
-      (upload → enhance → read → verify → safety) instead of one spinner.
-- [ ] **Metric cards**: `st.metric` row after parse — medicines found,
-      verified, review flags — glanceable summary before details.
-- [ ] **Replace raw-HTML tables with `st.dataframe`**: theme-aware, sortable,
-      mobile-scrollable; deletes the whole class of contrast bugs.
+      one endless scroll. (Scan exists as a top expander for now.)
+- [x] **Progress feedback** (`st.status` stages) + **metric cards**. DONE 2026-09-13.
+- [x] **Raw-HTML tables → `st.dataframe`** (theme-aware). DONE 2026-09-13.
 
 ## Phase 2 — Healthcare UX (what top medical apps do)
 

@@ -1,0 +1,17 @@
+# Medical theme: calm clinical teal. Custom light + dark so tables and text
+# stay readable in both modes (no hardcoded HTML colors needed).
+[theme]
+base = "light"
+primaryColor = "#0E7C7B"
+font = "sans serif"
+
+[theme.light]
+backgroundColor = "#FFFFFF"
+secondaryBackgroundColor = "#EAF4F4"
+textColor = "#10231F"
+
+[theme.dark]
+backgroundColor = "#0E1513"
+secondaryBackgroundColor = "#16211E"
+textColor = "#E8F3F0"
+primaryColor = "#3EC1BE"

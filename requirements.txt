@@ -1,20 +1,22 @@
+# Pinned 2026-09-13 — this exact set is tested working.
+# (Unpinned deps crashed the app once via numpy 2 vs pandas.)
 # Core Libraries
-streamlit
-pandas
-pydantic
-python-dotenv
-requests
+streamlit==1.63.0
+pandas==3.0.5
+pydantic==2.13.4
+python-dotenv==1.2.2
+requests==2.34.2
 
 # Gemini Integration (free vision model)
-langchain
-langchain-core
-langchain-google-genai
+langchain==1.4.0
+langchain-core==1.6.3
+langchain-google-genai==4.4.0
 
 # Image Processing
-Pillow
+Pillow==12.2.0
 
 # Preprocessing (local denoise + deskew, no API key)
-preocr[layout-refinement]
+preocr[layout-refinement]==1.11.0
 
 # Clipboard image paste
-streamlit-paste-button
+streamlit-paste-button==0.1.2
