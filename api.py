@@ -8,11 +8,15 @@ Endpoints:
   GET  /verify?name=X   -> offline Indian-DB check for one medicine (no key)
   POST /parse           -> multipart file(s) -> structured JSON + verification
                            (needs GOOGLE_API_KEY + langchain_google_genai)
+  POST /correct         -> JSON {name} -> re-verify a hand-corrected spelling (no key)
+  POST /strip           -> multipart strip/box photo -> brand read + verification
+                           (needs GOOGLE_API_KEY)
 """
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.concurrency import run_in_threadpool
+from pydantic import BaseModel
 from pathlib import Path
 from typing import List
 import tempfile, os, shutil
@@ -174,7 +178,7 @@ def _chat_worker(question: str, context: str, mode: str) -> dict:
                     words = cand.lower().split()
                     if any(w in {"what","sideeffect","side","effect","whatis","is","of","the","and","for","with","a","an"} for w in words):
                         continue
-                    db_ctx += f"\nDB: '{cand}' not in Indian registry (254k) — may be BD-local or misspelled."
+                    db_ctx += f"\nDB: '{cand}' not in Indian registry (254k) — may be misspelled or a local pack; suggest strip-QR check."
             except Exception:
                 pass
             if len(db_ctx) > 1800:
@@ -296,12 +300,13 @@ def _parse_worker(paths: list, tmpdir: str) -> dict:
         normalize_frequency,
         _add_confidence,
     )
-    res = get_prescription_informations(image_paths)
-    # When all Gemini models quota-die AND easyocr is absent, the result is
-    # useless empty JSON that would silently return 200 — surface it as an
-    # actionable 503 so the frontend can show a real error.
-    if res.get("_fallback") == "none" or "Offline fallback failed" in res.get("additional_notes", ""):
-        raise HTTPException(status_code=503, detail="All vision models unavailable (Gemini quota exhausted). Try again in a few minutes.")
+    try:
+        res = get_prescription_informations(image_paths)
+    except RuntimeError as e:
+        # Quota/network death raises (no guessed fallback) — surface as
+        # actionable 503 so the frontend shows a real error instead of
+        # invented medicines.
+        raise HTTPException(status_code=503, detail=str(e))
     for m in res.get("medications", []):
         m["frequency"] = normalize_frequency(m.get("frequency", ""))
     res["medications"] = dedupe_medications(res.get("medications"))
@@ -331,3 +336,57 @@ def _parse_worker(paths: list, tmpdir: str) -> dict:
     import shutil as _sh
     _sh.rmtree(tmpdir, ignore_errors=True)
     return {"result": res, "verification": checks}
+
+
+class CorrectIn(BaseModel):
+    name: str = ""
+
+
+@app.post("/correct")
+def correct(body: CorrectIn):
+    """Re-verify a hand-corrected spelling (no API key needed).
+
+    Used by the UI under an unverified line: user fixes the spelling or
+    pastes the strip brand, we return fresh verification + alternatives.
+    """
+    name = (body.name or "").strip()
+    if not name:
+        raise HTTPException(status_code=400, detail="name required")
+    from indian_db import verify_medicine, find_alternatives
+    chk = verify_medicine(name)
+    try:
+        chk["alternatives"] = find_alternatives(
+            chk.get("composition", "") or name, exclude=chk.get("match", ""), n=3
+        )
+    except Exception:
+        chk["alternatives"] = []
+    return {"verification": chk}
+
+
+@app.post("/strip")
+async def strip_scan(file: UploadFile = File(...)):
+    """Read the brand off a strip/box photo, then verify it.
+
+    Needs GOOGLE_API_KEY (one Gemini vision call via read_brand_from_strip).
+    """
+    if not os.environ.get("GOOGLE_API_KEY"):
+        raise HTTPException(status_code=503, detail="GOOGLE_API_KEY not set on server")
+    data = await file.read()
+    if not data:
+        raise HTTPException(status_code=400, detail="Empty upload")
+    from prescription import read_brand_from_strip
+    try:
+        brand = await run_in_threadpool(read_brand_from_strip, data)
+    except Exception as e:
+        raise HTTPException(status_code=503, detail=f"Strip read failed: {e}")
+    if not brand:
+        raise HTTPException(status_code=502, detail="Strip brand unreadable — try closer in good light")
+    from indian_db import verify_medicine, find_alternatives
+    chk = verify_medicine(brand)
+    try:
+        chk["alternatives"] = find_alternatives(
+            chk.get("composition", "") or brand, exclude=chk.get("match", ""), n=3
+        )
+    except Exception:
+        chk["alternatives"] = []
+    return {"strip_brand": brand, "verification": chk}

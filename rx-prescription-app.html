@@ -627,7 +627,14 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       var doseParts = [m.dosage, freqNorm, m.duration].filter(function(v){ return v && !isNA(v); });
       var dose = doseParts.join(' · ') || '—';
       rows.push([m.name || '', dose, st || '—']);
-      html += '<div class="med"><span class="dot ' + (ok ? 'g' : 'r') + '" aria-hidden="true"></span><div><b>' + esc(m.name) + '</b><div class="d">' + esc(dose) + (c.composition && !isNA(c.composition) ? ' · ' + esc(c.composition) : '') + '</div></div><span class="conf ' + (ok ? 'ok' : 'low') + '">' + esc(st.slice(0, 24) || '—') + '</span></div>';
+      html += '<div class="med"><span class="dot ' + (ok ? 'g' : 'r') + '" aria-hidden="true"></span><div><b>' + esc(m.name) + '</b><div class="d">' + esc(dose) + (c.composition && !isNA(c.composition) ? ' · ' + esc(c.composition) : '') + '</div><div class="d" style="margin-top:2px">' + esc(st || '—') + '</div></div><span class="conf ' + (ok ? 'ok' : 'low') + '">' + (ok ? 'verified' : 'check') + '</span></div>';
+      if (!ok) {
+        html += '<div class="card" style="margin:6px 0 12px 24px; font-size:13px; background:var(--fg-soft)"><b>Fix “' + esc(m.name) + '”:</b> '
+          + '<input id="fix' + i + '" value="' + esc(m.name) + '" style="max-width:180px"> '
+          + '<button class="btn btn-secondary" onclick="fixSpelling(' + i + ')">Re-check spelling</button> '
+          + '<label class="btn btn-secondary" style="cursor:pointer">Scan strip <input type="file" id="strip' + i + '" accept="image/*" style="display:none" onchange="scanStrip(' + i + ')"></label>'
+          + '<span id="fixmsg' + i + '" style="margin-left:8px"></span></div>';
+      }
       // Patient vs Doctor: patient sees plain words, doctor sees full technical — both share same med card but doctor gets more
       var extra = '';
       if (c.medicine_desc) extra += '<b>What it is for:</b> ' + esc(String(c.medicine_desc).slice(0, 500)) + '<br>';
@@ -645,6 +652,13 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
       if (combined) html += '<div class="card" style="margin:6px 0 12px 24px; font-size:13px; background:var(--fg-soft)">' + combined + '</div>';
     });
     if (!meds.length) html += '<p class="sub">Backend returned no medicines for this upload.</p>';
+    var illeg = (payload.result && payload.result.illegible_lines) || [];
+    if (illeg.length) html += '<div class="warnbox"><strong>' + illeg.length + (illeg.length === 1 ? ' line' : ' lines') + ' illegible — left blank, not guessed:</strong> ' + esc(illeg.join('; ')) + '. Correct the spelling above or scan the strip.</div>';
+    var blur = (payload.result && payload.result._blur) || null;
+    if (blur) {
+      var soft = Object.keys(blur).filter(function(k){ return blur[k] < 60; });
+      if (soft.length) html += '<div class="warnbox"><strong>Blurry photo:</strong> ' + esc(soft.join(', ')) + ' — retake closer in good light for a better read.</div>';
+    }
     html += '<div data-doctor' + (patientView ? ' hidden' : '') + '><details><summary>Doctor proof · match table</summary><table class="ds-table"><tbody>' +
       checks.map(function (c) { return '<tr><td>' + esc(c.extracted || '') + '</td><td class="num-col">' + esc(c.status || '') + '</td></tr>'; }).join('') +
       '</tbody></table></details></div>';
@@ -663,6 +677,40 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
     if (!patientView) html = '<div class="pill" style="margin-bottom:12px">Doctor mode — full registry details</div>' + html;
     res.innerHTML = html;
     bindExports(rows);
+  }
+  function fixSpelling(i) {
+    var inp = document.getElementById('fix' + i);
+    var msg = document.getElementById('fixmsg' + i);
+    if (!inp || !lastPayload) return;
+    msg.textContent = 'checking…';
+    fetch((API || '') + '/correct', { method: 'POST', headers: {'Content-Type': 'application/json'}, body: JSON.stringify({name: inp.value}) })
+      .then(function (r) { return r.json(); })
+      .then(function (j) {
+        var v = j.verification || {};
+        lastPayload.verification[i] = v;
+        var meds = lastPayload.result.medications;
+        if (meds && meds[i]) meds[i].name = inp.value;
+        renderLive(lastPayload);
+      })
+      .catch(function () { msg.textContent = 're-check failed'; });
+  }
+  function scanStrip(i) {
+    var inp = document.getElementById('strip' + i);
+    var msg = document.getElementById('fixmsg' + i);
+    if (!inp || !inp.files || !inp.files[0] || !lastPayload) return;
+    msg.textContent = 'reading strip…';
+    var fd = new FormData();
+    fd.append('file', inp.files[0], inp.files[0].name);
+    fetch((API || '') + '/strip', { method: 'POST', body: fd })
+      .then(function (r) { if (!r.ok) throw 0; return r.json(); })
+      .then(function (j) {
+        var v = j.verification || {};
+        lastPayload.verification[i] = v;
+        var meds = lastPayload.result.medications;
+        if (meds && meds[i] && j.strip_brand) meds[i].name = j.strip_brand;
+        renderLive(lastPayload);
+      })
+      .catch(function () { msg.textContent = 'strip unreadable — try closer in good light'; });
   }
   function run(fromDrop) {
     var files = fromDrop || (pick.files ? pick.files : []);
@@ -877,6 +925,7 @@ summary { cursor: pointer; font-weight: 600; min-height: 44px; font-size: 14.5px
         d.addEventListener('click', function () {
           // reopen like Streamlit's st.json(h["raw"])
           try {
+            lastPayload = e.payload;
             renderLive(e.payload);
             document.querySelector('[data-t="rx"]').click();
             window.scrollTo({ top: 0, behavior: 'smooth' });

@@ -133,7 +133,7 @@ def _verify_local(name: str) -> dict:
         details["match"] = best[0]
         result.update(details, status=f"Verified — auto-corrected from '{(name or '').strip()}'")
     else:
-        result["status"] = "Not found (likely BD-local brand)"
+        result["status"] = "Not found in Indian CSV — extracted name shown; verify via strip QR or correct spelling"
     return result
 
 

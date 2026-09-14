@@ -1,7 +1,7 @@
 """Side-effect / safety lookup via the free openFDA drug-label API.
 
 No API key needed (generous unauthenticated quota). Results are cached for
-7 days. If a brand has no FDA entry (common for India/BD-local brands), we
+7 days. If a brand has no FDA entry (common for India-local brands), we
 return the known composition and tell the user to verify with a pharmacist —
 we never invent side effects.
 """

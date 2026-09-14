@@ -257,10 +257,11 @@ def read_brand_from_strip(data: bytes) -> str:
     return (c or "").strip().strip('"').strip()[:80]
 
 class MedicationItem(BaseModel):
-    name: str
-    dosage: str
-    frequency: str
-    duration: str
+    # All optional: an illegible line must come back as name="" (never invented).
+    name: str = ""
+    dosage: str = ""
+    frequency: str = ""
+    duration: str = ""
 
     
 class PrescriptionInformations(BaseModel):
@@ -272,6 +273,8 @@ class PrescriptionInformations(BaseModel):
     doctor_license: str = Field(description="Doctor's license number")
     prescription_date: datetime = Field(description="Date of the prescription")
     medications: List[MedicationItem] = []
+    # Lines the model could see but not read — position hints, e.g. "line 3".
+    illegible_lines: List[str] = []
     additional_notes: str = Field(description="Additional notes or instructions")
 
 def load_images(inputs: dict) -> dict:
@@ -378,43 +381,12 @@ def image_model(inputs: dict) -> str | list[str] | dict:
         content = "\n".join(b.get("text", "") for b in content if isinstance(b, dict) and b.get("type") == "text" and b.get("text"))
     return content
 
-def _easyocr_fallback(image_paths: List[str]) -> dict:
-    """Offline OCR fallback when Gemini quota dies — returns minimal structure."""
-    try:
-        import easyocr
-        reader = easyocr.Reader(['en'], gpu=False, verbose=False)
-        texts = []
-        for p in image_paths:
-            try:
-                res = reader.readtext(p)
-                texts.extend([t for _, t, _ in res])
-            except Exception:
-                continue
-        txt = " ".join(texts)[:2000]
-        # very naive parse — at least return something for verification
-        return {
-            "patient_name": "Not available",
-            "patient_age": 0,
-            "patient_gender": "Not available",
-            "doctor_name": "Not available",
-            "doctor_license": "Not available",
-            "prescription_date": "1900-01-01T00:00:00",
-            "medications": [{"name": t, "dosage": "Not available", "frequency": "Not available", "duration": "Not available"} for t in txt.split()[:3] if len(t) > 3],
-            "additional_notes": txt[:500],
-            "_fallback": "easyocr",
-        }
-    except Exception as e:
-        return {
-            "patient_name": "Not available",
-            "patient_age": 0,
-            "patient_gender": "Not available",
-            "doctor_name": "Not available",
-            "doctor_license": "Not available",
-            "prescription_date": "1900-01-01T00:00:00",
-            "medications": [],
-            "additional_notes": f"Offline fallback failed: {e}",
-            "_fallback": "none",
-        }
+def _quota_error() -> RuntimeError:
+    # No OCR fallback by design (it turned random words into medicine names).
+    return RuntimeError(
+        "VISION_QUOTA_EXHAUSTED: all Gemini models unavailable (quota/network). "
+        "Retry in a few minutes — no guessed result is returned."
+    )
 
 
 def _second_pass_review(first: dict, image_paths: List[str]) -> dict:
@@ -449,9 +421,19 @@ def _second_pass_review(first: dict, image_paths: List[str]) -> dict:
         if m:
             try:
                 j = _js.loads(m.group(0))
-                # merge: keep first but update med names if reviewer changed and is more plausible (longer, not Not available)
+                # merge per-line: reviewer name wins only when non-blank;
+                # a blank reviewer name never erases a first-pass name (and
+                # vice versa) — illegible lines stay blank, never invented.
                 if j.get("medications"):
-                    first["medications"] = j["medications"]
+                    merged = []
+                    for i, orig in enumerate(first.get("medications") or []):
+                        rev = j["medications"][i] if i < len(j["medications"]) else {}
+                        keep = dict(orig)
+                        if str(rev.get("name") or "").strip():
+                            keep["name"] = rev["name"]
+                        merged.append(keep)
+                    merged.extend(j["medications"][len(merged):])
+                    first["medications"] = merged
                 return first
             except Exception:
                 pass
@@ -495,15 +477,33 @@ def get_prescription_informations(image_paths: List[str]) -> dict:
     - List of medications with name, dosage, frequency, and duration
     - Additional notes or instructions
     Note: If portions of the image are not clear then leave the values as empty. Do not make up the values.
+    Medication rule: if a medication line is illegible, set its name to "" (empty string)
+    and describe its position in illegible_lines (e.g. "line 3"). NEVER invent a
+    brand name for an unclear line — a blank name plus illegible_lines entry is
+    always better than a guessed name.
     """
     vision_chain = load_images_chain | image_model | parser
     try:
         first = vision_chain.invoke({'image_paths': image_paths, 'prompt': vision_prompt})
     except Exception as e:
-        # quota or network → offline fallback
+        # quota or network → hard error (no OCR fallback: it invented med names)
         if "429" in str(e) or "RESOURCE_EXHAUSTED" in str(e) or "quota" in str(e).lower():
-            return _easyocr_fallback(image_paths)
+            raise _quota_error()
         raise
+    # Blur is advisory, never blocking: log sharpness per image so low-accuracy
+    # cases can be traced to photo quality instead of the model.
+    try:
+        first["_blur"] = {os.path.basename(p): round(blur_score(p), 1) for p in image_paths}
+    except Exception:
+        pass
+    # Drop blank-name meds from the verified list, but count them so the UI can
+    # say "3 read + 1 illegible" instead of showing a guessed name.
+    _illegible = sum(1 for m in (first.get("medications") or []) if not str((m or {}).get("name") or "").strip())
+    first["medications"] = [m for m in (first.get("medications") or []) if str((m or {}).get("name") or "").strip()]
+    _prior = first.get("illegible_lines") or []
+    for _i in range(_illegible - len(_prior)):
+        _prior.append(f"unreadable line {_i + 1}")
+    first["illegible_lines"] = _prior
     # second-pass review (pharmacist) — only if meds exist AND any field is
     # missing/unclear (skipping it halves latency on clean prescriptions).
     def _needs_review(d):
@@ -1021,7 +1021,7 @@ def main():
                         } for c in checks])
                         st.subheader("Medicine Verification (Indian DB)")
                         st.dataframe(verify_df.astype(str), width="stretch", hide_index=True)
-                        st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' usually means a Bangladesh-local brand absent from the Indian list - not a fake drug.")
+                        st.caption("Source: open Indian Medicine Dataset (~254k brands) with pack/type info. 'Not found' means absent from the Indian list — verify via strip QR or correct spelling, not a fake-drug verdict.")
                         # Confidence per field (blue/yellow/red pattern from Analyzer)
                         cols = st.columns(len(checks)) if checks else []
                         for col, c in zip(cols, checks):
@@ -1221,6 +1221,9 @@ def main():
                     st.session_state.history = st.session_state.history[:20]
 
                 # Delete temp folder
+            except RuntimeError as e:
+                # Quota/network death (no guessed fallback by design)
+                st.error(f"⚠️ {e}")
             finally:
                 if output_folder:
                     remove_temp_folder(output_folder)
